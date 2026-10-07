@@ -1,12 +1,12 @@
 {
   "id": "opencroft.file-manager",
   "name": "File Manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browse, upload and download files over terminal handles, S3 and FTP.",
   "provides": {
     "apps": [
       {
-        "slug": "file-manager",
+        "type": "file-manager",
         "title": "File Manager",
         "description": "Browse and manage files over terminal sources and the space's S3/FTP connections.",
         "icon": "FolderOpen"

@@ -7,10 +7,13 @@ export interface TerminalSourceInfo {
   title: string
 }
 
+// The parts of the host's graph.listHandles this reads. @opencroft/server's
+// HostGraphApi does not declare it, so nothing checks these against the host.
 interface HandleInfo {
   nodeId: string
   spaceSlug: string
-  typeId: string
+  /** The node's stored, qualified type. */
+  type: string
   nodeName: string
   handleId: string
   /** The manifest id — the prefix form for a dynamic handle. */
@@ -20,12 +23,14 @@ interface HandleInfo {
 }
 
 interface GraphApiWithListHandles {
-  listHandles: (filter?: { role?: 'source' | 'target'; contextType?: string }) => Promise<HandleInfo[]>
+  listHandles: (filter?: { role?: 'source' | 'target'; handleType?: string }) => Promise<HandleInfo[]>
 }
 
+// Core's types, qualified: the form graphs store and handles carry.
+const TERMINAL_CONTEXT_HANDLE_TYPE = 'builtin.core.terminal-context'
 // A router's outputs are terminals already on this list under their own name;
 // offering them again would list each routed terminal once per router carrying it.
-const TERMINAL_ROUTER_TYPE = 'terminal-router'
+const TERMINAL_ROUTER_TYPE = 'builtin.core.terminal-router'
 
 // The same title the host's TerminalSelector gives a terminal, so a terminal
 // reads the same here as everywhere else it can be picked. A dynamic handle's
@@ -45,10 +50,10 @@ function titleOf(handle: HandleInfo): string {
 export async function listTerminalSources(space: string): Promise<TerminalSourceInfo[]> {
   const handles = await (host.graph as unknown as GraphApiWithListHandles).listHandles({
     role: 'source',
-    contextType: 'terminal-context',
+    handleType: TERMINAL_CONTEXT_HANDLE_TYPE,
   })
   return handles
     .filter((handle) => handle.spaceSlug === space)
-    .filter((handle) => handle.typeId !== TERMINAL_ROUTER_TYPE)
+    .filter((handle) => handle.type !== TERMINAL_ROUTER_TYPE)
     .map((handle) => ({ ref: `term:${handle.nodeId}/${handle.handleId}`, title: titleOf(handle) }))
 }
