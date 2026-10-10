@@ -2,8 +2,8 @@ import type { Readable } from 'node:stream'
 
 import type { Client, SFTPWrapper } from 'ssh2'
 
-import { connectSsh, joinPath as join, normalizePath as normalize, shellQuote } from './shared'
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
+import { connectSsh, joinPath as join, normalizePath as normalize, shellQuote } from './shared'
 
 function openSftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => {
@@ -33,7 +33,9 @@ function execOnClient(client: Client, command: string): Promise<void> {
       }
       let stderr = ''
       channel.stderr.on('data', (d: Buffer) => (stderr += d.toString()))
-      channel.on('close', (code: number) => (code === 0 ? resolve() : reject(new Error(stderr || `exited with code ${code}`))))
+      channel.on('close', (code: number) =>
+        code === 0 ? resolve() : reject(new Error(stderr || `exited with code ${code}`)),
+      )
     })
   })
 }
@@ -57,7 +59,7 @@ export function sshProvider(ctx: TerminalContext): Provider {
                   const full = join(dir, item.filename)
                   return {
                     name: item.filename,
-                    path: isDir ? full + '/' : full,
+                    path: isDir ? `${full}/` : full,
                     type: isDir ? ('directory' as const) : ('file' as const),
                     size: item.attrs.size,
                     modified: new Date(item.attrs.mtime * 1000).toISOString(),

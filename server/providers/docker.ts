@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process'
 import type { Readable } from 'node:stream'
 
-import type { Client, ClientChannel } from 'ssh2'
+import type { ClientChannel } from 'ssh2'
 
-import { connectSsh, joinPath as join, normalizePath as normalize, shellQuote } from './shared'
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
+import { connectSsh, joinPath as join, normalizePath as normalize, shellQuote } from './shared'
 
 function dockerArgv(ctx: TerminalContext, extra: string[]): string[] {
   const contextArgs = ctx.contextName ? ['--context', ctx.contextName] : []
@@ -12,9 +12,9 @@ function dockerArgv(ctx: TerminalContext, extra: string[]): string[] {
   return ['docker', ...contextArgs, 'exec', ...userArgs, '-i', ctx.containerId ?? '', ...extra]
 }
 
-// docker-exec composes with the parent transport (`ctx.via`, defaulting to local) — the
-// same shape @opencroft/terminal's backend.ts uses. Only local and ssh `via` are
-// supported here; a deeper chain (e.g. docker-over-wsl) is out of scope.
+// docker-exec composes with the parent transport (`ctx.via`, defaulting to local).
+// Only local and ssh `via` are supported here; a deeper chain (e.g.
+// docker-over-wsl) is out of scope.
 function via(ctx: TerminalContext): TerminalContext {
   return ctx.via ?? { type: 'local' }
 }
@@ -53,7 +53,9 @@ async function execSsh(ctx: TerminalContext, command: string): Promise<string> {
         let stderr = ''
         channel.on('data', (d: Buffer) => (stdout += d.toString()))
         channel.stderr.on('data', (d: Buffer) => (stderr += d.toString()))
-        channel.on('close', (code: number) => (code === 0 ? resolve(stdout) : reject(new Error(stderr || `exited with code ${code}`))))
+        channel.on('close', (code: number) =>
+          code === 0 ? resolve(stdout) : reject(new Error(stderr || `exited with code ${code}`)),
+        )
       })
     })
   } finally {
@@ -117,7 +119,7 @@ export function dockerProvider(ctx: TerminalContext): Provider {
     async list(path): Promise<ListResult> {
       const dir = normalize(path)
       const q = shellQuote(dir)
-      // '|'-delimited: a filename containing '|' or a newline will misparse. Accepted v1 limitation.
+      // '|'-delimited: a filename containing '|' or a newline will misparse; such names are not supported.
       const cmd =
         `for f in ${q}/* ${q}/.*; do ` +
         '[ -e "$f" ] || continue; ' +
@@ -141,7 +143,7 @@ export function dockerProvider(ctx: TerminalContext): Provider {
           const full = join(dir, name)
           return {
             name,
-            path: isDir ? full + '/' : full,
+            path: isDir ? `${full}/` : full,
             type: isDir ? ('directory' as const) : ('file' as const),
             size: isDir ? 0 : parseInt(size, 10) || 0,
             modified: mtime ? new Date(parseInt(mtime, 10) * 1000).toISOString() : '',
@@ -152,7 +154,10 @@ export function dockerProvider(ctx: TerminalContext): Provider {
 
     async readStream(path): Promise<ReadStreamResult> {
       const full = normalize(path)
-      const sizeOut = await execVia(ctx, dockerArgv(ctx, ['sh', '-c', `stat -c %s ${shellQuote(full)} 2>/dev/null || echo 0`]))
+      const sizeOut = await execVia(
+        ctx,
+        dockerArgv(ctx, ['sh', '-c', `stat -c %s ${shellQuote(full)} 2>/dev/null || echo 0`]),
+      )
       const size = parseInt(sizeOut.trim(), 10) || undefined
       const { stdout, onError, onFailure, close } = await spawnStreamVia(ctx, dockerArgv(ctx, ['cat', full]))
       onError((err) => stdout.emit('error', err))

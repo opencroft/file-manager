@@ -1,7 +1,14 @@
-import { Button, ControlledInput, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Label } from '@ext/ui'
-import { React } from '@ext/host'
-
-const { useEffect, useState } = React
+import {
+  Button,
+  ControlledInput,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Label,
+} from '@opencroft/client/ui'
+import { useEffect, useState } from 'react'
 
 /** Set/clear a source's rootPath — reuses ConnectionDialog's dialog primitives
  *  rather than inventing new chrome. Works for both connection and terminal

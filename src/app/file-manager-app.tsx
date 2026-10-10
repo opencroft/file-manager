@@ -1,25 +1,26 @@
-import { invoke, React, toast } from '@ext/host'
-import { type AppComponentProps, TerminalRef } from '@opencroft/client'
+import { invoke } from '@opencroft/client/actions'
+import type { AppComponentProps } from '@opencroft/client/app'
+import { TerminalRef } from '@opencroft/client/terminal'
 import { Cloud, FolderTree, HardDrive, Pencil, Server, Trash2 } from 'lucide-react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 
 import { ContextMenuItem } from '@/components/ui/context-menu'
-import { FileManagerBrowser } from './file-manager-browser'
-import type { FileManagerHost } from './use-file-manager-host'
 import { ConnectionDialog, type ConnectionDraft } from './connection-dialog'
 import { readDeepLink, writeDeepLink } from './deep-link'
+import { FileManagerBrowser } from './file-manager-browser'
 import { RootPathDialog } from './root-path-dialog'
 import type { ListSourcesResult, ProtocolConnection } from './types'
+import type { FileManagerHost } from './use-file-manager-host'
 
-const { useCallback, useEffect, useMemo, useState } = React
-
-const CONNECTION_ICON: Record<ProtocolConnection['type'], React.ReactNode> = {
+const CONNECTION_ICON: Record<ProtocolConnection['type'], ReactNode> = {
   s3: <Cloud className='size-4' />,
   ftp: <Server className='size-4' />,
 }
 
 const EMPTY_SOURCES: ListSourcesResult = { connections: [], terminalSources: [], sourceSettings: {} }
 
-function rootPathMenuItem(onSetRootPath: () => void): React.ReactNode {
+function rootPathMenuItem(onSetRootPath: () => void): ReactNode {
   return (
     <ContextMenuItem onClick={onSetRootPath}>
       <FolderTree className='size-3' />
@@ -31,7 +32,7 @@ function rootPathMenuItem(onSetRootPath: () => void): React.ReactNode {
 // The sidebar wraps the whole row in a context menu (right-click / long-press)
 // whenever a PlaceItem carries `menu` — this is just its content (ContextMenuItem
 // children), not another ContextMenu/ContextMenuContent wrapper.
-function connectionMenu(onEdit: () => void, onRemove: () => void, onSetRootPath: () => void): React.ReactNode {
+function connectionMenu(onEdit: () => void, onRemove: () => void, onSetRootPath: () => void): ReactNode {
   return (
     <>
       <ContextMenuItem onClick={onEdit}>
@@ -71,7 +72,7 @@ export function FileManagerApp({ spaceSlug }: AppComponentProps) {
   // would race the state update this same call queues.
   const loadSources = useCallback(async () => {
     try {
-      const result = (await invoke('listSources', spaceSlug)) as ListSourcesResult
+      const result = await invoke<ListSourcesResult>('listSources', spaceSlug)
       setSources(result)
       return result
     } catch (err) {
@@ -225,7 +226,11 @@ export function FileManagerApp({ spaceSlug }: AppComponentProps) {
         }}
         sourceName={rootPathTarget?.name ?? ''}
         initialRootPath={rootPathTarget ? sources.sourceSettings[rootPathTarget.ref]?.rootPath : undefined}
-        onSave={(rootPath) => saveRootPath(rootPathTarget!.ref, rootPath)}
+        onSave={async (rootPath) => {
+          if (rootPathTarget) {
+            await saveRootPath(rootPathTarget.ref, rootPath)
+          }
+        }}
       />
     </div>
   )

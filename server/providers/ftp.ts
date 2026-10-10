@@ -26,7 +26,7 @@ async function withClient<T>(config: ResolvedFtpConfig, fn: (client: Client) => 
 }
 
 function join(dir: string, name: string): string {
-  return dir.endsWith('/') ? dir + name : dir + '/' + name
+  return dir.endsWith('/') ? dir + name : `${dir}/${name}`
 }
 
 export function ftpProvider(config: ResolvedFtpConfig): Provider {
@@ -40,7 +40,7 @@ export function ftpProvider(config: ResolvedFtpConfig): Provider {
           const full = join(dir, item.name)
           return {
             name: item.name,
-            path: isDir ? full + '/' : full,
+            path: isDir ? `${full}/` : full,
             type: isDir ? 'directory' : 'file',
             size: isDir ? 0 : item.size,
             modified: item.modifiedAt ? item.modifiedAt.toISOString() : '',
@@ -72,7 +72,13 @@ export function ftpProvider(config: ResolvedFtpConfig): Provider {
     async delete(path): Promise<void> {
       // Matches the S3 provider's convention: a trailing slash means "directory,
       // delete recursively" (the caller's listing already reports paths this way).
-      await withClient(config, (client) => (path.endsWith('/') ? client.removeDir(path) : client.remove(path)))
+      await withClient(config, async (client) => {
+        if (path.endsWith('/')) {
+          await client.removeDir(path)
+        } else {
+          await client.remove(path)
+        }
+      })
     },
 
     async rename(oldPath, newPath): Promise<void> {

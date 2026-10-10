@@ -40,7 +40,7 @@ function createClient(config: ResolvedS3Config): S3Client {
 
 function normalizePrefix(path: string): string {
   const clean = path.replace(/^\/+/, '')
-  return clean && !clean.endsWith('/') ? clean + '/' : clean
+  return clean && !clean.endsWith('/') ? `${clean}/` : clean
 }
 
 async function* listAllKeys(client: S3Client, bucket: string, prefix: string): AsyncGenerator<string> {
@@ -82,7 +82,12 @@ export function s3Provider(config: ResolvedS3Config): Provider {
     async list(path, cursor): Promise<ListResult> {
       const prefix = normalizePrefix(path)
       const response = await client.send(
-        new ListObjectsV2Command({ Bucket: config.bucket, Delimiter: '/', Prefix: prefix || undefined, ContinuationToken: cursor }),
+        new ListObjectsV2Command({
+          Bucket: config.bucket,
+          Delimiter: '/',
+          Prefix: prefix || undefined,
+          ContinuationToken: cursor,
+        }),
       )
 
       const entries: FileEntry[] = []
@@ -92,7 +97,7 @@ export function s3Provider(config: ResolvedS3Config): Provider {
         }
         const name = dir.Prefix.slice(prefix.length).replace(/\/$/, '')
         if (name) {
-          entries.push({ name, path: '/' + dir.Prefix, type: 'directory', size: 0, modified: '' })
+          entries.push({ name, path: `/${dir.Prefix}`, type: 'directory', size: 0, modified: '' })
         }
       }
       for (const obj of response.Contents ?? []) {
@@ -101,7 +106,13 @@ export function s3Provider(config: ResolvedS3Config): Provider {
         }
         const name = prefix ? obj.Key.slice(prefix.length) : obj.Key
         if (name) {
-          entries.push({ name, path: '/' + obj.Key, type: 'file', size: obj.Size ?? 0, modified: obj.LastModified?.toISOString() ?? '' })
+          entries.push({
+            name,
+            path: `/${obj.Key}`,
+            type: 'file',
+            size: obj.Size ?? 0,
+            modified: obj.LastModified?.toISOString() ?? '',
+          })
         }
       }
       return { entries, nextCursor: response.NextContinuationToken }
@@ -156,7 +167,9 @@ export function s3Provider(config: ResolvedS3Config): Provider {
       }
 
       if (!oldIsDir) {
-        await client.send(new CopyObjectCommand({ Bucket: config.bucket, CopySource: `${config.bucket}/${oldKey}`, Key: newKey }))
+        await client.send(
+          new CopyObjectCommand({ Bucket: config.bucket, CopySource: `${config.bucket}/${oldKey}`, Key: newKey }),
+        )
         await deleteKeys(client, config.bucket, [oldKey])
         return
       }
@@ -167,7 +180,11 @@ export function s3Provider(config: ResolvedS3Config): Provider {
       }
       await mapWithConcurrency(oldKeys, RENAME_CONCURRENCY, async (key) => {
         await client.send(
-          new CopyObjectCommand({ Bucket: config.bucket, CopySource: `${config.bucket}/${key}`, Key: newKey + key.slice(oldKey.length) }),
+          new CopyObjectCommand({
+            Bucket: config.bucket,
+            CopySource: `${config.bucket}/${key}`,
+            Key: newKey + key.slice(oldKey.length),
+          }),
         )
       })
       if (oldKeys.length > 0) {

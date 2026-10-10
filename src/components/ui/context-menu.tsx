@@ -1,6 +1,6 @@
 "use client"
 
-import * as React from "react"
+import type { ComponentProps } from "react"
 import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu"
 import { cn } from "cn"
 import { ChevronRightIcon, CheckIcon } from "lucide-react"
@@ -140,7 +140,7 @@ function ContextMenuSubTrigger({
 
 function ContextMenuSubContent({
   ...props
-}: React.ComponentProps<typeof ContextMenuContent>) {
+}: ComponentProps<typeof ContextMenuContent>) {
   return (
     <ContextMenuContent
       data-slot="context-menu-sub-content"
@@ -238,7 +238,7 @@ function ContextMenuSeparator({
 function ContextMenuShortcut({
   className,
   ...props
-}: React.ComponentProps<"span">) {
+}: ComponentProps<"span">) {
   return (
     <span
       data-slot="context-menu-shortcut"

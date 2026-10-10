@@ -13,12 +13,10 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@ext/ui'
-import { React } from '@ext/host'
+} from '@opencroft/client/ui'
+import { useEffect, useState } from 'react'
 
 import type { FtpConnectionConfig, ProtocolConnection, S3ConnectionConfig } from './types'
-
-const { useEffect, useState } = React
 
 function emptyS3(): S3ConnectionConfig {
   return { endpoint: '', region: '', bucket: '', accessKeyId: '', secretAccessKey: '' }
@@ -91,7 +89,11 @@ export function ConnectionDialog({
         <div className='flex flex-col gap-3'>
           <div className='flex flex-col gap-1.5'>
             <Label className='text-xs'>Name</Label>
-            <ControlledInput value={draft.name} onValueChanged={(v) => setDraft({ ...draft, name: v })} className='h-8 text-sm' />
+            <ControlledInput
+              value={draft.name}
+              onValueChanged={(v: string) => setDraft({ ...draft, name: v })}
+              className='h-8 text-sm'
+            />
           </div>
 
           <div className='flex flex-col gap-1.5'>
@@ -99,7 +101,7 @@ export function ConnectionDialog({
             <Select
               items={CONNECTION_TYPE_LABELS}
               value={draft.type}
-              onValueChange={(v) => {
+              onValueChange={(v: string | null) => {
                 if (v !== null) {
                   setType(v as 's3' | 'ftp')
                 }
@@ -120,23 +122,47 @@ export function ConnectionDialog({
             <>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Endpoint (optional)</Label>
-                <ControlledInput value={s3.endpoint ?? ''} onValueChanged={(v) => updateConfig({ endpoint: v })} placeholder='https://s3.example.com' className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={s3.endpoint ?? ''}
+                  onValueChanged={(v: string) => updateConfig({ endpoint: v })}
+                  placeholder='https://s3.example.com'
+                  className='h-8 text-sm font-mono'
+                />
               </div>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Region</Label>
-                <ControlledInput value={s3.region ?? ''} onValueChanged={(v) => updateConfig({ region: v })} placeholder='us-east-1' className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={s3.region ?? ''}
+                  onValueChanged={(v: string) => updateConfig({ region: v })}
+                  placeholder='us-east-1'
+                  className='h-8 text-sm font-mono'
+                />
               </div>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Bucket</Label>
-                <ControlledInput value={s3.bucket} onValueChanged={(v) => updateConfig({ bucket: v })} className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={s3.bucket}
+                  onValueChanged={(v: string) => updateConfig({ bucket: v })}
+                  className='h-8 text-sm font-mono'
+                />
               </div>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Access key id</Label>
-                <ControlledInput value={s3.accessKeyId} onValueChanged={(v) => updateConfig({ accessKeyId: v })} placeholder='or secret:NAME' className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={s3.accessKeyId}
+                  onValueChanged={(v: string) => updateConfig({ accessKeyId: v })}
+                  placeholder='or secret:NAME'
+                  className='h-8 text-sm font-mono'
+                />
               </div>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Secret access key</Label>
-                <ControlledInput value={s3.secretAccessKey} onValueChanged={(v) => updateConfig({ secretAccessKey: v })} placeholder='or secret:NAME' className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={s3.secretAccessKey}
+                  onValueChanged={(v: string) => updateConfig({ secretAccessKey: v })}
+                  placeholder='or secret:NAME'
+                  className='h-8 text-sm font-mono'
+                />
               </div>
             </>
           ) : null}
@@ -145,23 +171,36 @@ export function ConnectionDialog({
             <>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Host</Label>
-                <ControlledInput value={ftp.host} onValueChanged={(v) => updateConfig({ host: v })} className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={ftp.host}
+                  onValueChanged={(v: string) => updateConfig({ host: v })}
+                  className='h-8 text-sm font-mono'
+                />
               </div>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Port</Label>
                 <ControlledInput
                   value={String(ftp.port ?? 21)}
-                  onValueChanged={(v) => updateConfig({ port: Number(v) || 21 })}
+                  onValueChanged={(v: string) => updateConfig({ port: Number(v) || 21 })}
                   className='h-8 text-sm font-mono'
                 />
               </div>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>User</Label>
-                <ControlledInput value={ftp.user} onValueChanged={(v) => updateConfig({ user: v })} className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={ftp.user}
+                  onValueChanged={(v: string) => updateConfig({ user: v })}
+                  className='h-8 text-sm font-mono'
+                />
               </div>
               <div className='flex flex-col gap-1.5'>
                 <Label className='text-xs'>Password</Label>
-                <ControlledInput value={ftp.password} onValueChanged={(v) => updateConfig({ password: v })} placeholder='or secret:NAME' className='h-8 text-sm font-mono' />
+                <ControlledInput
+                  value={ftp.password}
+                  onValueChanged={(v: string) => updateConfig({ password: v })}
+                  placeholder='or secret:NAME'
+                  className='h-8 text-sm font-mono'
+                />
               </div>
             </>
           ) : null}

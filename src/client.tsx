@@ -1,4 +1,4 @@
-import { defineExtension } from '@ext/host'
+import { defineExtension } from '@opencroft/client/extension'
 
 import { FileManagerApp } from './app/file-manager-app'
 

@@ -1,29 +1,10 @@
-import host from '@ext/host'
+import { graph, type HandleInfo } from '@opencroft/server/graph'
 
 export interface TerminalSourceInfo {
   /** `term:<nodeId>/<handleId>` — the source ref every action and route takes. */
   ref: string
   /** The node, qualified by what distinguishes this handle on it. */
   title: string
-}
-
-// The parts of the host's graph.listHandles this reads. @opencroft/server's
-// HostGraphApi does not declare it, so nothing checks these against the host.
-interface HandleInfo {
-  nodeId: string
-  spaceSlug: string
-  /** The node's stored, qualified type. */
-  type: string
-  nodeName: string
-  handleId: string
-  /** The manifest id — the prefix form for a dynamic handle. */
-  declaredId: string
-  label?: string
-  dynamic: boolean
-}
-
-interface GraphApiWithListHandles {
-  listHandles: (filter?: { role?: 'source' | 'target'; handleType?: string }) => Promise<HandleInfo[]>
 }
 
 // Core's types, qualified: the form graphs store and handles carry.
@@ -48,7 +29,7 @@ function titleOf(handle: HandleInfo): string {
  * the containers running, the worktrees present — so a stopped one is not listed.
  */
 export async function listTerminalSources(space: string): Promise<TerminalSourceInfo[]> {
-  const handles = await (host.graph as unknown as GraphApiWithListHandles).listHandles({
+  const handles = await graph.listHandles({
     role: 'source',
     handleType: TERMINAL_CONTEXT_HANDLE_TYPE,
   })

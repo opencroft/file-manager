@@ -1,12 +1,10 @@
-import { React } from '@ext/host'
+import { useState } from 'react'
 
 import { FileBrowser } from '@/components/ui/file-manager/file-browser'
 import type { Crumb } from '@/components/ui/file-manager/file-toolbar'
 import { useFileBrowser } from '@/components/ui/file-manager/use-file-browser'
 import { deepLinkHref } from './deep-link'
-import { useFileManagerHost, type FileManagerHost } from './use-file-manager-host'
-
-const { useMemo } = React
+import { type FileManagerHost, useFileManagerHost } from './use-file-manager-host'
 
 function placeName(sections: FileManagerHost['sections'], placeId: string): string {
   for (const section of sections) {
@@ -22,7 +20,11 @@ function placeName(sections: FileManagerHost['sections'], placeId: string): stri
 // convention (crumb id = accumulated path, always trailing-slash) so the kit hook's
 // own navigation (which reads crumb.id straight from here) lines up with what
 // use-file-manager-host's onLocationChange expects.
-function buildInitialCrumbs(sections: FileManagerHost['sections'], placeId: string, path?: string): Crumb[] | undefined {
+function buildInitialCrumbs(
+  sections: FileManagerHost['sections'],
+  placeId: string,
+  path?: string,
+): Crumb[] | undefined {
   if (!placeId) {
     return undefined
   }
@@ -34,8 +36,8 @@ function buildInitialCrumbs(sections: FileManagerHost['sections'], placeId: stri
   const crumbs = [root]
   let accumulated = ''
   for (const segment of segments) {
-    accumulated += segment + '/'
-    crumbs.push({ id: '/' + accumulated, name: segment })
+    accumulated += `${segment}/`
+    crumbs.push({ id: `/${accumulated}`, name: segment })
   }
   return crumbs
 }
@@ -74,10 +76,9 @@ export function FileManagerBrowser({
   className?: string
 }) {
   const host = useFileManagerHost(space, sections, defaultPlaceId, initialPath, onLocationSettled, activeRootPath)
-  // Only meaningful on first mount — useFileBrowser reads its initialPath option
-  // once, on its own first render, so recomputing this on later place changes is
-  // harmless (it's never consulted again).
-  const initialCrumbs = useMemo(() => buildInitialCrumbs(sections, defaultPlaceId, initialPath), [])
+  // Built once, on first mount: useFileBrowser reads its initialPath option only
+  // on its own first render, so later place changes have nothing to update here.
+  const [initialCrumbs] = useState(() => buildInitialCrumbs(sections, defaultPlaceId, initialPath))
   const browser = useFileBrowser({
     ...host,
     state: sourcesLoading ? 'loading' : host.state,

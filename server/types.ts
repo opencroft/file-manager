@@ -1,6 +1,6 @@
 import type { Readable } from 'node:stream'
 
-import type { TerminalContext } from '@opencroft/server'
+import type { TerminalContext } from '@opencroft/server/terminal'
 
 export type { TerminalContext }
 
@@ -36,9 +36,9 @@ export interface S3ConnectionConfig {
   endpoint?: string
   region?: string
   bucket: string
-  /** Literal value, or "secret:NAME" resolved server-side via host.secrets. */
+  /** Literal value, or "secret:NAME" resolved server-side from the Secrets Store. */
   accessKeyId: string
-  /** Literal value, or "secret:NAME" resolved server-side via host.secrets. */
+  /** Literal value, or "secret:NAME" resolved server-side from the Secrets Store. */
   secretAccessKey: string
 }
 
@@ -46,7 +46,7 @@ export interface FtpConnectionConfig {
   host: string
   port?: number
   user: string
-  /** Literal value, or "secret:NAME" resolved server-side via host.secrets. */
+  /** Literal value, or "secret:NAME" resolved server-side from the Secrets Store. */
   password: string
   secure?: boolean
 }

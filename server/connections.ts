@@ -1,8 +1,16 @@
-import host from '@ext/host'
+import { secrets } from '@opencroft/server/secrets'
+import { terminal } from '@opencroft/server/terminal'
 
-import { getConnection, getSourceSettings } from './storage'
-import type { FtpConnectionConfig, Provider, ResolvedFtpConfig, ResolvedS3Config, S3ConnectionConfig, Source } from './types'
 import { getProvider } from './provider'
+import { getConnection, getSourceSettings } from './storage'
+import type {
+  FtpConnectionConfig,
+  Provider,
+  ResolvedFtpConfig,
+  ResolvedS3Config,
+  S3ConnectionConfig,
+  Source,
+} from './types'
 
 const SECRET_PREFIX = 'secret:'
 const TERM_PREFIX = 'term:'
@@ -16,7 +24,7 @@ async function resolveField(value: string): Promise<string> {
     return value
   }
   const name = value.slice(SECRET_PREFIX.length).trim()
-  const resolved = name ? await host.secrets.resolve(name) : null
+  const resolved = name ? await secrets.resolve(name) : null
   if (resolved === null) {
     throw new Error(`Secret "${name}" not found in any Secrets Store`)
   }
@@ -41,7 +49,7 @@ async function resolveFtpConfig(config: FtpConnectionConfig): Promise<ResolvedFt
 /**
  * Resolve a source reference into a concrete, secret-resolved `Source`.
  * `term:<nodeId>/<handleId>` — any terminal-context output handle, anywhere,
- * resolved via host.terminal.getContext (no edge required).
+ * resolved via terminal.getContext (no edge required).
  * `conn:<id>` — an S3/FTP connection configured in `space`.
  */
 export async function resolveSource(space: string, ref: string): Promise<Source> {
@@ -53,7 +61,7 @@ export async function resolveSource(space: string, ref: string): Promise<Source>
     }
     const nodeId = rest.slice(0, slash)
     const handleId = rest.slice(slash + 1)
-    const ctx = await host.terminal.getContext(nodeId, handleId)
+    const ctx = await terminal.getContext(nodeId, handleId)
     return { kind: 'terminal', ctx }
   }
 
@@ -79,18 +87,18 @@ function normalizeRoot(rootPath: string): string | undefined {
   if (!trimmed) {
     return undefined
   }
-  return trimmed.startsWith('/') ? trimmed : '/' + trimmed
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
 }
 
 /** Wraps a provider so every path is relative to `root` — the UI never sees or sends anything above it. */
 function withRootPath(provider: Provider, root: string): Provider {
-  const prefix = root + '/'
+  const prefix = `${root}/`
 
   const toReal = (uiPath: string) => {
-    const clean = uiPath.startsWith('/') ? uiPath : '/' + uiPath
+    const clean = uiPath.startsWith('/') ? uiPath : `/${uiPath}`
     return clean === '/' ? prefix : root + clean
   }
-  const stripRoot = (realPath: string) => (realPath.startsWith(prefix) ? '/' + realPath.slice(prefix.length) : realPath)
+  const stripRoot = (realPath: string) => (realPath.startsWith(prefix) ? `/${realPath.slice(prefix.length)}` : realPath)
 
   return {
     async list(path, cursor) {

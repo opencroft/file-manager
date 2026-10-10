@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 
-import { joinPath as join, normalizePath as normalize } from './shared'
 import type { FileEntry, ListResult, Provider, ReadStreamResult } from '../types'
+import { joinPath as join, normalizePath as normalize } from './shared'
 
 export const localProvider: Provider = {
   async list(path): Promise<ListResult> {
@@ -20,7 +20,13 @@ export const localProvider: Provider = {
       } catch {
         // Entry vanished or is unreadable (broken symlink, permissions) — list it with blank stats.
       }
-      entries.push({ name: item.name, path: isDir ? full + '/' : full, type: isDir ? 'directory' : 'file', size, modified })
+      entries.push({
+        name: item.name,
+        path: isDir ? `${full}/` : full,
+        type: isDir ? 'directory' : 'file',
+        size,
+        modified,
+      })
     }
     return { entries }
   },

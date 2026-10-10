@@ -4,8 +4,8 @@ import { getProviderForRef } from './connections'
 
 // This route runs outside the TanStack Start request context (it's dispatched by a
 // raw Nitro handler, not a Start route), so everything it reaches has to work
-// without one: host.storage and host.terminal.getContext, which getProviderForRef
-// resolves through, do, the same as host.graph and host.secrets.
+// without one: storage and terminal.getContext, which getProviderForRef
+// resolves through, do, the same as graph and secrets.
 
 class MissingParamError extends Error {}
 

@@ -1,19 +1,23 @@
 import { exec, spawn } from 'node:child_process'
 import type { Readable } from 'node:stream'
 
-import { joinPath as join, normalizePath as normalize, shellQuote } from './shared'
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
+import { joinPath as join, normalizePath as normalize, shellQuote } from './shared'
 
 function run(distro: string | undefined, cmd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const args = distro ? ['-d', distro] : []
-    exec(`wsl ${args.join(' ')} -- bash -c "${cmd.replace(/"/g, '\\"')}"`, { maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(stderr || err.message))
-        return
-      }
-      resolve(stdout)
-    })
+    exec(
+      `wsl ${args.join(' ')} -- bash -c "${cmd.replace(/"/g, '\\"')}"`,
+      { maxBuffer: 50 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr || err.message))
+          return
+        }
+        resolve(stdout)
+      },
+    )
   })
 }
 
@@ -23,8 +27,11 @@ export function wslProvider(ctx: TerminalContext): Provider {
   return {
     async list(path): Promise<ListResult> {
       const dir = normalize(path)
-      // '|'-delimited: a filename containing '|' or a newline will misparse. Accepted v1 limitation.
-      const output = await run(distro, `find ${shellQuote(dir)} -maxdepth 1 -mindepth 1 -printf '%y|%f|%s|%T@\\n' 2>/dev/null | sort`)
+      // '|'-delimited: a filename containing '|' or a newline will misparse; such names are not supported.
+      const output = await run(
+        distro,
+        `find ${shellQuote(dir)} -maxdepth 1 -mindepth 1 -printf '%y|%f|%s|%T@\\n' 2>/dev/null | sort`,
+      )
       if (!output.trim()) {
         return { entries: [] }
       }
@@ -37,7 +44,7 @@ export function wslProvider(ctx: TerminalContext): Provider {
           const full = join(dir, name)
           return {
             name,
-            path: isDir ? full + '/' : full,
+            path: isDir ? `${full}/` : full,
             type: isDir ? ('directory' as const) : ('file' as const),
             size: isDir ? 0 : parseInt(size, 10) || 0,
             modified: mtime ? new Date(parseFloat(mtime) * 1000).toISOString() : '',

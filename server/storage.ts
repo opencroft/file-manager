@@ -1,4 +1,4 @@
-import host from '@ext/host'
+import { storage } from '@opencroft/server/storage'
 
 import type { ProtocolConnection } from './types'
 
@@ -14,18 +14,21 @@ export interface SourceSettings {
 }
 
 export async function listConnections(space: string): Promise<ProtocolConnection[]> {
-  return (await host.storage.get<ProtocolConnection[]>(connectionsKey(space))) ?? []
+  return (await storage.get<ProtocolConnection[]>(connectionsKey(space))) ?? []
 }
 
 async function saveConnections(space: string, connections: ProtocolConnection[]): Promise<void> {
-  await host.storage.set(connectionsKey(space), connections)
+  await storage.set(connectionsKey(space), connections)
 }
 
 export async function getConnection(space: string, id: string): Promise<ProtocolConnection | undefined> {
   return (await listConnections(space)).find((c) => c.id === id)
 }
 
-export async function addConnection(space: string, connection: Omit<ProtocolConnection, 'id'>): Promise<ProtocolConnection> {
+export async function addConnection(
+  space: string,
+  connection: Omit<ProtocolConnection, 'id'>,
+): Promise<ProtocolConnection> {
   const connections = await listConnections(space)
   const created: ProtocolConnection = { ...connection, id: crypto.randomUUID() }
   await saveConnections(space, [...connections, created])
@@ -51,12 +54,15 @@ export async function updateConnection(
 
 export async function removeConnection(space: string, id: string): Promise<void> {
   const connections = await listConnections(space)
-  await saveConnections(space, connections.filter((c) => c.id !== id))
+  await saveConnections(
+    space,
+    connections.filter((c) => c.id !== id),
+  )
   await setSourceSettings(space, `conn:${id}`, undefined)
 }
 
 export async function getAllSourceSettings(space: string): Promise<Record<string, SourceSettings>> {
-  return (await host.storage.get<Record<string, SourceSettings>>(sourceSettingsKey(space))) ?? {}
+  return (await storage.get<Record<string, SourceSettings>>(sourceSettingsKey(space))) ?? {}
 }
 
 export async function getSourceSettings(space: string, ref: string): Promise<SourceSettings> {
@@ -70,12 +76,16 @@ function hasMeaningfulRootPath(settings: SourceSettings | undefined): boolean {
   return Boolean(settings?.rootPath && settings.rootPath !== '/')
 }
 
-export async function setSourceSettings(space: string, ref: string, settings: SourceSettings | undefined): Promise<void> {
+export async function setSourceSettings(
+  space: string,
+  ref: string,
+  settings: SourceSettings | undefined,
+): Promise<void> {
   const all = await getAllSourceSettings(space)
   if (!hasMeaningfulRootPath(settings)) {
     delete all[ref]
   } else {
     all[ref] = settings as SourceSettings
   }
-  await host.storage.set(sourceSettingsKey(space), all)
+  await storage.set(sourceSettingsKey(space), all)
 }

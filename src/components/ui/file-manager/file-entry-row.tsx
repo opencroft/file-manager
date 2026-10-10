@@ -1,4 +1,4 @@
-import { type ChangeEvent, type MouseEvent, type ReactNode } from 'react'
+import { type ChangeEvent, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { Download, File, Folder, FolderPlus, Pencil, Trash2 } from 'lucide-react'
 
 import {
@@ -119,7 +119,7 @@ export function FileEntryRow({
 
   // The row stays non-selectable / scroll-friendly, except while renaming the
   // name needs text selection and a caret.
-  const touchStyle = renaming
+  const touchStyle: CSSProperties = renaming
     ? { touchAction: 'auto', userSelect: 'text' }
     : { touchAction: 'pan-y', WebkitTouchCallout: 'none', userSelect: 'none' }
 

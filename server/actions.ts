@@ -4,12 +4,12 @@ import {
   getAllSourceSettings,
   listConnections,
   removeConnection,
+  type SourceSettings,
   setSourceSettings as setSourceSettingsStorage,
   updateConnection,
-  type SourceSettings,
 } from './storage'
 import { listTerminalSources } from './terminal-sources'
-import type { Provider, ProtocolConnection } from './types'
+import type { ProtocolConnection, Provider } from './types'
 
 // Every action is scoped by the space its caller is in: connections and root
 // paths are stored per space (server/storage.ts), so the space is as much part

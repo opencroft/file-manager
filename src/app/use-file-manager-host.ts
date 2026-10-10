@@ -1,11 +1,14 @@
-import { invoke, routeUrl, toast, React } from '@ext/host'
+import { invoke } from '@opencroft/client/actions'
+import { routeUrl } from '@opencroft/client/extension'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 
-import type { Crumb, FileEntry as KitFileEntry } from '@/components/ui/file-manager/file-toolbar'
-import type { TransferItemData } from '@/components/ui/file-manager/transfer-item'
 import type { FileListState } from '@/components/ui/file-manager/file-entry-list'
+import type { FileEntry as KitFileEntry } from '@/components/ui/file-manager/file-entry-row'
+import type { Crumb } from '@/components/ui/file-manager/file-toolbar'
+import type { TransferItemData } from '@/components/ui/file-manager/transfer-item'
 import { formatModified, formatSize, formatSpeed, joinPath, parentPath } from '@/lib/format'
-
-const { useCallback, useEffect, useRef, useState } = React
+import { placeOpeningPath, type SettledPlace } from './place-opening'
 
 const MAX_LIST_PAGES = 20
 
@@ -32,12 +35,16 @@ function toKitEntry(entry: ProviderFileEntry): KitFileEntry {
   }
 }
 
-async function fetchAllEntries(space: string, source: string, path: string): Promise<{ entries: KitFileEntry[]; truncated: boolean }> {
+async function fetchAllEntries(
+  space: string,
+  source: string,
+  path: string,
+): Promise<{ entries: KitFileEntry[]; truncated: boolean }> {
   const collected: ProviderFileEntry[] = []
   let cursor: string | undefined
   let truncated = false
   for (let page = 0; page < MAX_LIST_PAGES; page++) {
-    const result = (await invoke('list', space, source, path, cursor)) as ListResult
+    const result = await invoke<ListResult>('list', space, source, path, cursor)
     collected.push(...result.entries)
     if (!result.nextCursor) {
       break
@@ -58,7 +65,11 @@ interface TransferHandle {
 }
 
 export interface FileManagerHost {
-  sections: { id: string; label?: string; items: { id: string; name: string; icon?: React.ReactNode; menu?: React.ReactNode }[] }[]
+  sections: {
+    id: string
+    label?: string
+    items: { id: string; name: string; icon?: ReactNode; menu?: ReactNode }[]
+  }[]
   entries: KitFileEntry[]
   state: FileListState
   errorMessage?: string
@@ -110,68 +121,83 @@ export function useFileManagerHost(
   // one's results (rapid navigation, or a slow backend like FTP).
   const loadSeq = useRef(0)
 
+  // Fire only on the (source, path) pair itself changing, not on every render:
+  // the callback is read through a ref, so its identity is the caller's concern.
+  // With no place there is no location to report: while sources are still
+  // loading, reporting ('', path) would overwrite the source the caller is
+  // about to restore.
+  const onLocationSettledRef = useRef(onLocationSettled)
   useEffect(() => {
-    onLocationSettled?.(activePlaceId, currentPath)
-    // Fire only on the (source, path) pair itself changing, not on every
-    // render — onLocationSettled's own identity is the caller's concern.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onLocationSettledRef.current = onLocationSettled
+  })
+  useEffect(() => {
+    if (activePlaceId) {
+      onLocationSettledRef.current?.(activePlaceId, currentPath)
+    }
   }, [activePlaceId, currentPath])
 
-  const load = useCallback(async (source: string, path: string) => {
-    const seq = ++loadSeq.current
-    if (!source) {
-      setState('empty')
-      setEntries([])
-      return
-    }
-    setState('loading')
-    try {
-      const { entries: kitEntries, truncated } = await fetchAllEntries(space, source, path)
-      if (loadSeq.current !== seq) {
+  const load = useCallback(
+    async (source: string, path: string) => {
+      const seq = ++loadSeq.current
+      if (!source) {
+        setState('empty')
+        setEntries([])
         return
       }
-      setEntries(kitEntries)
-      setState(kitEntries.length ? 'list' : 'empty')
-      setErrorMessage(undefined)
-      if (truncated) {
-        toast.info(`Showing the first ${MAX_LIST_PAGES} pages — this location has more entries than fit.`)
+      setState('loading')
+      try {
+        const { entries: kitEntries, truncated } = await fetchAllEntries(space, source, path)
+        if (loadSeq.current !== seq) {
+          return
+        }
+        setEntries(kitEntries)
+        setState(kitEntries.length ? 'list' : 'empty')
+        setErrorMessage(undefined)
+        if (truncated) {
+          toast.info(`Showing the first ${MAX_LIST_PAGES} pages — this location has more entries than fit.`)
+        }
+      } catch (err) {
+        if (loadSeq.current !== seq) {
+          return
+        }
+        setState('error')
+        setErrorMessage(err instanceof Error ? err.message : String(err))
       }
-    } catch (err) {
-      if (loadSeq.current !== seq) {
-        return
-      }
-      setState('error')
-      setErrorMessage(err instanceof Error ? err.message : String(err))
-    }
-  }, [space])
+    },
+    [space],
+  )
 
-  // True once we've settled on a real (non-empty) default place at least once —
-  // distinguishes "the very first source becoming available" (use initialPath,
-  // the deep-link restore) from "the place changed later" (e.g. the active
-  // source disappeared after a sources refresh and a different default took
-  // over — that's a new location, not a continuation, so it resets to "/"
-  // rather than reusing whatever path the OLD source happened to be on).
-  const hasSettledOnce = useRef(false)
+  // The place browsing last opened, compared against rather than acted on
+  // blindly: this effect also re-runs with nothing changed (React StrictMode
+  // runs mount effects twice), and a re-run must not reopen the place at "/"
+  // over the deep-link path its first run is loading.
+  const settledPlace = useRef<SettledPlace | undefined>(undefined)
 
+  // Opens the default place when it, or its root path, changes. A re-rooted
+  // source is a new location rather than a refresh, since every path held is
+  // relative to the old root, and without the reload it keeps showing its old
+  // listing with nothing on screen saying so. Which path it opens at is
+  // placeOpeningPath's. Ordinary navigation goes through onLocationChange.
   useEffect(() => {
     if (!defaultPlaceId) {
+      // A place lost and found again is reopened, at "/", not left empty.
+      if (settledPlace.current) {
+        settledPlace.current = { ...settledPlace.current, placeId: '' }
+      }
       setState('empty')
       setEntries([])
       return
     }
-    const path = hasSettledOnce.current ? '/' : initialPath || '/'
-    hasSettledOnce.current = true
+    const next: SettledPlace = { space, placeId: defaultPlaceId, rootPath: activeRootPath }
+    const path = placeOpeningPath(settledPlace.current, next, initialPath)
+    settledPlace.current = next
+    if (path === undefined) {
+      return
+    }
     setActivePlaceId(defaultPlaceId)
     setCurrentPath(path)
     load(defaultPlaceId, path)
-    // Re-runs on the two events that invalidate the path being held: the default
-    // place changing, and the active place's root path changing. The second is
-    // not a refresh — every path here is expressed relative to the old root, so
-    // it resets to "/" exactly as a place change does, and without it a re-rooted
-    // source keeps showing the listing it had before, with nothing on screen
-    // saying so. Ordinary navigation between these goes through onLocationChange.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultPlaceId, activeRootPath])
+  }, [space, defaultPlaceId, activeRootPath, initialPath, load])
 
   const onLocationChange = useCallback(
     (placeId: string, path: Crumb[]) => {
@@ -282,7 +308,9 @@ export function useFileManagerHost(
           refresh()
         } else {
           // Keep the handle (and its file) around — a failed transfer can be retried.
-          setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, state: 'error', error: `Upload failed (${xhr.status})` } : t)))
+          setTransfers((prev) =>
+            prev.map((t) => (t.id === id ? { ...t, state: 'error', error: `Upload failed (${xhr.status})` } : t)),
+          )
         }
       })
 
