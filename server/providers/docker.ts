@@ -4,7 +4,9 @@ import type { Readable } from 'node:stream'
 import type { ClientChannel } from 'ssh2'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
-import { connectSsh, joinPath as join, normalizePath as normalize, shellQuote } from './shared'
+import { createArgv, refuseTaken } from './create'
+import { connectSsh, joinPath as join, normalizePath as normalize } from './shared'
+import { shellQuote } from './shell'
 
 function dockerArgv(ctx: TerminalContext, extra: string[]): string[] {
   const contextArgs = ctx.contextName ? ['--context', ctx.contextName] : []
@@ -202,7 +204,11 @@ export function dockerProvider(ctx: TerminalContext): Provider {
     },
 
     async mkdir(path): Promise<void> {
-      await execVia(ctx, dockerArgv(ctx, ['mkdir', '-p', normalize(path)]))
+      await refuseTaken(path, () => execVia(ctx, dockerArgv(ctx, createArgv('directory', normalize(path)))))
+    },
+
+    async createFile(path): Promise<void> {
+      await refuseTaken(path, () => execVia(ctx, dockerArgv(ctx, createArgv('file', normalize(path)))))
     },
   }
 }

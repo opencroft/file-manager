@@ -27,6 +27,18 @@ test('the same place under a new root opens at the root', () => {
   assert.equal(placeOpeningPath({ ...place, rootPath: '/srv/app' }, place, '/docs/nested/'), '/')
 })
 
+test('a different place browsing itself moved to keeps the location it opened', () => {
+  assert.equal(placeOpeningPath(place, { ...place, placeId: 'conn:beta' }, '/docs/nested/', 'conn:beta'), undefined)
+})
+
+test('a different place than the one browsing moved to opens at the root', () => {
+  assert.equal(placeOpeningPath(place, { ...place, placeId: 'conn:beta' }, undefined, 'conn:gamma'), '/')
+})
+
+test('the place browsing moved to, re-rooted, opens at the root', () => {
+  assert.equal(placeOpeningPath(place, { ...place, rootPath: '/srv/app' }, undefined, place.placeId), '/')
+})
+
 test('the same place id in another space opens at the root', () => {
   assert.equal(placeOpeningPath(place, { ...place, space: 'space-2' }, '/docs/nested/'), '/')
 })

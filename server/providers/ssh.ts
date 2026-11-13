@@ -3,7 +3,9 @@ import type { Readable } from 'node:stream'
 import type { Client, SFTPWrapper } from 'ssh2'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
-import { connectSsh, joinPath as join, normalizePath as normalize, shellQuote } from './shared'
+import { createCommand, refuseTaken } from './create'
+import { connectSsh, joinPath as join, normalizePath as normalize } from './shared'
+import { shellQuote } from './shell'
 
 function openSftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => {
@@ -112,9 +114,15 @@ export function sshProvider(ctx: TerminalContext): Provider {
     },
 
     async mkdir(path): Promise<void> {
-      // sftp.mkdir doesn't create parents — use `mkdir -p` over exec for the same
-      // recursive semantics every other backend has.
-      await withClient(ctx, (client) => execOnClient(client, `mkdir -p ${shellQuote(normalize(path))}`))
+      await refuseTaken(path, () =>
+        withClient(ctx, (client) => execOnClient(client, createCommand('directory', normalize(path)))),
+      )
+    },
+
+    async createFile(path): Promise<void> {
+      await refuseTaken(path, () =>
+        withClient(ctx, (client) => execOnClient(client, createCommand('file', normalize(path)))),
+      )
     },
   }
 }

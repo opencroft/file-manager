@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult } from '../types'
+import { refuseTaken } from './create'
 import { joinPath as join, normalizePath as normalize } from './shared'
 
 export const localProvider: Provider = {
@@ -57,6 +58,10 @@ export const localProvider: Provider = {
   },
 
   async mkdir(path): Promise<void> {
-    await fs.promises.mkdir(normalize(path), { recursive: true })
+    await refuseTaken(path, () => fs.promises.mkdir(normalize(path)))
+  },
+
+  async createFile(path): Promise<void> {
+    await refuseTaken(path, () => fs.promises.writeFile(normalize(path), '', { flag: 'wx' }))
   },
 }

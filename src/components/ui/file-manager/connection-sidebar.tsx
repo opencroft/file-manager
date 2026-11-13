@@ -1,7 +1,7 @@
 'use client'
 
 import type { MouseEvent, ReactNode } from 'react'
-import { Folder, Plus } from 'lucide-react'
+import { Folder, Pin, PinOff, Plus } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -27,6 +27,26 @@ export interface PlaceItem {
   // A page of its own for this place, opened in a new tab on a middle-click.
   // Host-built; none means no new-tab gesture.
   href?: string
+  // A second, muted line under the name: where the place is (e.g. the
+  // terminal a bookmarked folder is on).
+  detail?: ReactNode
+  // A pin button at the row's end, always shown: `pinned` draws it as
+  // unpinning, `label` names what pressing it does.
+  pin?: PlacePin
+  // A folder inside another place (a bookmark, a recent folder): activating
+  // the item opens `placeId` at `path` (root-first, the same crumbs the
+  // breadcrumb shows) rather than a place root of its own.
+  location?: { placeId: string; path: { id: string; name: string }[] }
+  // Why the place can't be opened now (e.g. a folder outside its terminal's
+  // root path). Given, the row is dimmed, pressing it does nothing, and the
+  // reason shows in place of `detail`; its pin still works.
+  unreachable?: string
+}
+
+export interface PlacePin {
+  pinned: boolean
+  label: string
+  onToggle: () => void
 }
 
 // A middle-click (the wheel) opens `href` in a new tab -- what it does on a
@@ -85,19 +105,16 @@ export function ConnectionSidebar({
           ) : null}
           {section.items.map((item) => {
             const active = item.id === activePlaceId
-            const row = (
+            const unreachable = item.unreachable !== undefined
+            const detail = unreachable ? item.unreachable : item.detail
+            const place = (
               <button
-                key={item.id}
                 type='button'
+                disabled={unreachable}
                 onClick={() => onPlaceActivate?.(item.id)}
-                {...middleClickOpens(item.href)}
-                title={item.name}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors',
-                  active
-                    ? 'bg-primary/10 font-medium text-foreground ring-1 ring-primary/40'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
-                )}
+                {...(unreachable ? {} : middleClickOpens(item.href))}
+                title={unreachable ? `${item.name}: ${item.unreachable}` : item.name}
+                className='flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60'
               >
                 {item.label !== undefined ? (
                   <span className='flex min-w-0 flex-1 items-center gap-2'>{item.label}</span>
@@ -106,10 +123,42 @@ export function ConnectionSidebar({
                     <span className='shrink-0 text-muted-foreground' aria-hidden>
                       {item.icon ?? <Folder className='size-4' />}
                     </span>
-                    <span className='min-w-0 flex-1 truncate'>{item.name}</span>
+                    <span className='flex min-w-0 flex-1 flex-col'>
+                      <span className='truncate'>{item.name}</span>
+                      {detail !== undefined ? (
+                        <span className='flex min-w-0 items-center gap-1 truncate font-normal text-muted-foreground'>
+                          {detail}
+                        </span>
+                      ) : null}
+                    </span>
                   </>
                 )}
               </button>
+            )
+            const row = (
+              <div
+                key={item.id}
+                className={cn(
+                  'flex w-full items-center rounded-md text-xs transition-colors',
+                  active
+                    ? 'bg-primary/10 font-medium text-foreground ring-1 ring-primary/40'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                {place}
+                {item.pin ? (
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    aria-label={item.pin.label}
+                    title={item.pin.label}
+                    className='mr-0.5 h-7 w-7 shrink-0 p-0 text-muted-foreground hover:text-foreground'
+                    onClick={item.pin.onToggle}
+                  >
+                    {item.pin.pinned ? <PinOff className='size-3.5' /> : <Pin className='size-3.5' />}
+                  </Button>
+                ) : null}
+              </div>
             )
             if (!item.menu) return row
             return (

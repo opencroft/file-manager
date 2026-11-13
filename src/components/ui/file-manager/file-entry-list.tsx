@@ -1,8 +1,22 @@
-import { useState, type DragEvent } from 'react'
-import { AlertTriangle, FolderOpen, RefreshCw } from 'lucide-react'
+import { useState, type DragEvent, type ReactElement } from 'react'
+import { AlertTriangle, ArrowDown, ArrowUp, FilePlus, FolderOpen, FolderPlus, RefreshCw, Upload } from 'lucide-react'
 
-import { FileEntryRow, type FileEntry } from '@/components/ui/file-manager/file-entry-row'
+import {
+  FILE_SORT_LABEL,
+  FileEntryRow,
+  MENU_TRIGGER_TOUCH_STYLE,
+  type FileEntry,
+  type FileEntryKind,
+  type FileSort,
+  type FileSortKey,
+} from './file-entry-row'
 import { Button } from '@/components/ui/button'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
 import { cn } from 'cn'
 
 export type FileListState = 'list' | 'loading' | 'empty' | 'error'
@@ -13,6 +27,12 @@ interface FileEntryListProps {
   errorMessage?: string
   view?: 'list' | 'grid'
   selectedIds?: string[]
+  // The order `entries` arrive in, shown on the list view's column headers.
+  // With onSortChange the headers are buttons: pressing the sorted column flips
+  // its direction, another column starts ascending. The list does not reorder
+  // entries itself.
+  sort?: FileSort
+  onSortChange?: (sort: FileSort) => void
   onActivate?: (entry: FileEntry) => void
   onSelect?: (entry: FileEntry, additive: boolean) => void
   onDownload?: (entry: FileEntry) => void
@@ -27,12 +47,32 @@ interface FileEntryListProps {
   onRenameCancel?: () => void
   onMenuOpenChange?: (open: boolean) => void
   onDelete?: (entry: FileEntry) => void
+  onCopyPath?: (entry: FileEntry) => void
+  // Directories whose id is in `bookmarkedIds` offer Remove bookmark, the rest Bookmark.
+  onToggleBookmark?: (entry: FileEntry) => void
+  bookmarkedIds?: string[]
   onNewFolder?: () => void
+  onNewFile?: () => void
+  // A new entry being named: while set, a draft row of that kind sits first
+  // among its kind (folders, or files), named through the same rename* draft
+  // as Rename. It has no menu, and leaving its input cancels it.
+  creating?: FileEntryKind | null
+  // Why the name typed into the rename or draft row can't be used.
+  renameError?: string
+  // The list's own menu, on the empty space below the entries and in an
+  // empty folder (right-click / long-press): New folder, New file, Upload
+  // file, Refresh -- each shown when its callback is wired.
+  onUpload?: () => void
+  onRefresh?: () => void
   // Native file/folder drop onto the list (dropzone).
   onFilesDrop?: (files: File[]) => void
   onRetry?: () => void
   className?: string
 }
+
+// The draft row's id and React key. Only its key meets the entries' ids, so it
+// is spelled to stay clear of a host's path-like ones.
+const DRAFT_ID = 'file-entry-list:draft'
 
 const TH = 'py-1.5 pl-2 pr-2 text-left align-middle text-xs font-medium uppercase tracking-wide text-muted-foreground'
 
@@ -43,15 +83,18 @@ const TH = 'py-1.5 pl-2 pr-2 text-left align-middle text-xs font-medium uppercas
 // menus are uncontrolled and open natively (right-click on desktop, long-press
 // on touch -- `ContextMenu` has no imperative way to open), and
 // onMenuOpenChange lets the owner cancel an in-flight
-// rename the moment a menu opens. There is no row drag in v1, so there is no
-// gesture controller here. Visual only: it exposes state + callbacks and holds
-// no data logic.
+// rename the moment a menu opens. The space below the entries, and an empty
+// folder, open the list's own menu the same ways. There is no row drag in v1,
+// so there is no gesture controller here. Visual only: it exposes state +
+// callbacks and holds no data logic.
 export function FileEntryList({
   entries,
   state = 'list',
   errorMessage,
   view = 'list',
   selectedIds,
+  sort,
+  onSortChange,
   onActivate,
   onSelect,
   onDownload,
@@ -63,7 +106,15 @@ export function FileEntryList({
   onRenameCancel,
   onMenuOpenChange,
   onDelete,
+  onCopyPath,
+  onToggleBookmark,
+  bookmarkedIds,
   onNewFolder,
+  onNewFile,
+  creating,
+  renameError,
+  onUpload,
+  onRefresh,
   onFilesDrop,
   onRetry,
   className,
@@ -80,26 +131,122 @@ export function FileEntryList({
     if (files.length && onFilesDrop) onFilesDrop(files)
   }
 
+  const header = (key: FileSortKey, className?: string) => {
+    const direction = sort?.key === key ? sort.direction : undefined
+    const label = FILE_SORT_LABEL[key]
+    return (
+      <th
+        className={cn(TH, className)}
+        aria-sort={direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : undefined}
+      >
+        {onSortChange ? (
+          <button
+            type='button'
+            className={cn(
+              'inline-flex items-center gap-1 uppercase tracking-wide outline-none hover:text-foreground focus-visible:text-foreground',
+              direction && 'text-foreground',
+            )}
+            onClick={() => onSortChange({ key, direction: direction === 'asc' ? 'desc' : 'asc' })}
+          >
+            {label}
+            {direction === 'asc' ? <ArrowUp className='size-3' aria-hidden /> : null}
+            {direction === 'desc' ? <ArrowDown className='size-3' aria-hidden /> : null}
+          </button>
+        ) : (
+          label
+        )}
+      </th>
+    )
+  }
+
+  const variant = view === 'grid' ? 'card' : 'table'
+
   const renderEntry = (entry: FileEntry) => (
     <FileEntryRow
       key={entry.id}
       entry={entry}
-      variant={view === 'grid' ? 'card' : 'table'}
+      variant={variant}
       selected={selectedIds?.includes(entry.id)}
       renaming={renamingId === entry.id}
       renameValue={renameValue}
       onRenameChange={onRenameChange}
       onRenameCommit={onRenameCommit}
       onRenameCancel={onRenameCancel}
+      renameError={renamingId === entry.id ? renameError : undefined}
       onActivate={onActivate}
       onSelect={onSelect}
       onDownload={onDownload}
       onRename={onRename}
       onDelete={onDelete}
       onNewFolder={onNewFolder}
+      onNewFile={onNewFile}
+      onCopyPath={onCopyPath}
+      onToggleBookmark={onToggleBookmark}
+      bookmarked={bookmarkedIds?.includes(entry.id)}
       onMenuOpenChange={onMenuOpenChange}
     />
   )
+
+  // The entries, with the draft row first among its kind while one is being named.
+  const rows = (() => {
+    const rendered = entries.map(renderEntry)
+    if (!creating) return rendered
+    const draft = (
+      <FileEntryRow
+        key={DRAFT_ID}
+        entry={{ id: DRAFT_ID, name: '', kind: creating }}
+        variant={variant}
+        renaming
+        renameValue={renameValue}
+        onRenameChange={onRenameChange}
+        onRenameCommit={onRenameCommit}
+        onRenameCancel={onRenameCancel}
+        renameError={renameError}
+        renameBlur='cancel'
+      />
+    )
+    const firstFile = entries.findIndex((e) => e.kind !== 'directory')
+    const at = creating === 'directory' ? 0 : firstFile === -1 ? entries.length : firstFile
+    return [...rendered.slice(0, at), draft, ...rendered.slice(at)]
+  })()
+
+  const hasListMenu = Boolean(onNewFolder || onNewFile || onUpload || onRefresh)
+  // Wraps a surface with nothing on it (the space below the entries, an empty
+  // folder) in the list's menu.
+  const withListMenu = (surface: ReactElement) =>
+    hasListMenu ? (
+      <ContextMenu onOpenChange={onMenuOpenChange}>
+        <ContextMenuTrigger render={surface} />
+        <ContextMenuContent className='min-w-[10rem]'>
+          {onNewFolder ? (
+            <ContextMenuItem onClick={() => onNewFolder()}>
+              <FolderPlus className='size-3' />
+              New folder
+            </ContextMenuItem>
+          ) : null}
+          {onNewFile ? (
+            <ContextMenuItem onClick={() => onNewFile()}>
+              <FilePlus className='size-3' />
+              New file
+            </ContextMenuItem>
+          ) : null}
+          {onUpload ? (
+            <ContextMenuItem onClick={() => onUpload()}>
+              <Upload className='size-3' />
+              Upload file
+            </ContextMenuItem>
+          ) : null}
+          {onRefresh ? (
+            <ContextMenuItem onClick={() => onRefresh()}>
+              <RefreshCw className='size-3' />
+              Refresh
+            </ContextMenuItem>
+          ) : null}
+        </ContextMenuContent>
+      </ContextMenu>
+    ) : (
+      surface
+    )
 
   const body = (() => {
     if (state === 'loading') {
@@ -114,12 +261,15 @@ export function FileEntryList({
         </div>
       )
     }
-    if (state === 'empty') {
-      return (
-        <div className='flex min-h-full flex-col items-center justify-center gap-2 py-10 text-center text-muted-foreground'>
+    if (state === 'empty' && !creating) {
+      return withListMenu(
+        <div
+          style={MENU_TRIGGER_TOUCH_STYLE}
+          className='flex min-h-full flex-col items-center justify-center gap-2 py-10 text-center text-muted-foreground'
+        >
           <FolderOpen className='size-6' aria-hidden />
           <span className='text-xs'>This folder is empty</span>
-        </div>
+        </div>,
       )
     }
     if (state === 'error') {
@@ -138,29 +288,35 @@ export function FileEntryList({
         </div>
       )
     }
-    return view === 'grid' ? (
-      // As many columns as the pane fits: auto-fill with a 6rem minimum tile,
-      // the spare width shared out -- not a fixed count per viewport
-      // breakpoint, which stretched tiles in a wide pane and cramped them in a
-      // narrow one. Unlike a wrapping flex row, the last row stays on the
-      // same columns.
-      <div className='grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-1 p-1'>
-        {entries.map(renderEntry)}
+    const listing =
+      view === 'grid' ? (
+        // As many columns as the pane fits: auto-fill with a 6rem minimum tile,
+        // the spare width shared out -- not a fixed count per viewport
+        // breakpoint, which stretched tiles in a wide pane and cramped them in a
+        // narrow one. Unlike a wrapping flex row, the last row stays on the
+        // same columns.
+        <div className='grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-1 p-1'>{rows}</div>
+      ) : (
+        <table className='w-full border-collapse text-sm'>
+          <thead>
+            <tr className='border-b'>
+              {header('name')}
+              {header('date')}
+              {header('type')}
+              {header('size', 'text-right')}
+            </tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      )
+    // The space below the last entry fills the rest of the pane and opens the
+    // list's menu. It is never shorter than 2rem, a little over one table
+    // row, so a folder long enough to scroll still has some at its end.
+    return (
+      <div className='flex min-h-full flex-col'>
+        {listing}
+        {withListMenu(<div data-slot='file-list-space' style={MENU_TRIGGER_TOUCH_STYLE} className='min-h-8 flex-1' />)}
       </div>
-    ) : (
-      <table className='w-full border-collapse text-sm'>
-        <thead>
-          <tr className='border-b'>
-            <th className={TH}>Name</th>
-            <th className={TH}>Date</th>
-            <th className={TH}>Type</th>
-            <th className={cn(TH, 'text-right')}>Size</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map(renderEntry)}
-        </tbody>
-      </table>
     )
   })()
 

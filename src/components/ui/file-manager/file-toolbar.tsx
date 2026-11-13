@@ -1,11 +1,11 @@
-'use client'
-
 import { useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  ArrowUpDown,
   ChevronRight,
+  FilePlus,
   FolderPlus,
   LayoutGrid,
   List,
@@ -20,9 +20,20 @@ import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  DEFAULT_FILE_SORT,
+  FILE_SORT_LABEL,
+  type FileSort,
+  type FileSortKey,
+} from './file-entry-row'
 import { cn } from 'cn'
 
 export interface Crumb {
@@ -76,7 +87,12 @@ interface FileToolbarProps {
   view?: 'list' | 'grid'
   onViewChange?: (view: 'list' | 'grid') => void
   showViewToggle?: boolean
+  // The listing's order. With onSortChange a Sort menu picks the column and
+  // the direction; it is the grid view's only sort control.
+  sort?: FileSort
+  onSortChange?: (sort: FileSort) => void
   onNewFolder?: () => void
+  onNewFile?: () => void
   onUpload?: () => void
   className?: string
 }
@@ -85,9 +101,9 @@ interface FileToolbarProps {
 // Up / Refresh), then the address bar — a single bordered field that shows the
 // breadcrumb (which dynamically collapses leading segments under a “…” dropdown
 // until they fit) and a search toggle on its right that swaps the breadcrumb for
-// an in-place search field. Trailing: list/grid toggle, New folder, Upload
-// (inline on desktop, collapsed into a “more” menu on narrow widths). Visual
-// only.
+// an in-place search field. Trailing: Sort menu, list/grid toggle, New folder,
+// New file, Upload (inline on desktop, collapsed into a “more” menu on narrow widths).
+// Visual only.
 export function FileToolbar({
   path,
   onNavigate,
@@ -105,12 +121,44 @@ export function FileToolbar({
   view = 'list',
   onViewChange,
   showViewToggle = false,
+  sort = DEFAULT_FILE_SORT,
+  onSortChange,
   onNewFolder,
+  onNewFile,
   onUpload,
   className,
 }: FileToolbarProps) {
   const hasNav = Boolean(onBack || onForward || onUp || onRefresh)
-  const hasActions = Boolean(showViewToggle || onNewFolder || onUpload)
+  const hasActions = Boolean(showViewToggle || onSortChange || onNewFolder || onNewFile || onUpload)
+
+  // The Sort menu's items, in the desktop Sort menu and the narrow “more” menu.
+  const sortItems = onSortChange ? (
+    <>
+      <DropdownMenuGroup>
+        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={sort.key}
+          onValueChange={(key: FileSortKey) => onSortChange({ ...sort, key })}
+        >
+          {(Object.keys(FILE_SORT_LABEL) as FileSortKey[]).map((key) => (
+            <DropdownMenuRadioItem key={key} value={key}>
+              {FILE_SORT_LABEL[key]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuGroup>
+      <DropdownMenuSeparator />
+      <DropdownMenuGroup>
+        <DropdownMenuRadioGroup
+          value={sort.direction}
+          onValueChange={(direction: FileSort['direction']) => onSortChange({ ...sort, direction })}
+        >
+          <DropdownMenuRadioItem value='asc'>Ascending</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value='desc'>Descending</DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuGroup>
+    </>
+  ) : null
   const [searchOpen, setSearchOpen] = useState(false)
 
   // --- breadcrumb dynamic overflow: hide leading segments under “…” until fit ---
@@ -274,6 +322,18 @@ export function FileToolbar({
 
       {/* trailing actions — hidden on mobile while search is open */}
       <div className={cn('flex shrink-0 items-center gap-1', searchOpen && 'hidden sm:flex')}>
+        {sortItems ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant='ghost' size='sm' aria-label='Sort' className='hidden h-7 w-7 p-0 sm:inline-flex' />}
+            >
+              <ArrowUpDown className='size-4' />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end' className='min-w-[10rem]'>
+              {sortItems}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         {showViewToggle ? (
           <div className='hidden items-center rounded-md border p-0.5 sm:flex'>
             <Button variant='ghost' size='sm' aria-label='Table view' className={cn('h-6 w-6 p-0', view === 'list' && 'bg-muted')} onClick={() => onViewChange?.('list')}>
@@ -287,6 +347,11 @@ export function FileToolbar({
         {onNewFolder ? (
           <Button variant='ghost' size='sm' aria-label='New folder' className='hidden h-7 w-7 p-0 sm:inline-flex' onClick={onNewFolder}>
             <FolderPlus className='size-4' />
+          </Button>
+        ) : null}
+        {onNewFile ? (
+          <Button variant='ghost' size='sm' aria-label='New file' className='hidden h-7 w-7 p-0 sm:inline-flex' onClick={onNewFile}>
+            <FilePlus className='size-4' />
           </Button>
         ) : null}
         {onUpload ? (
@@ -307,6 +372,11 @@ export function FileToolbar({
                   <FolderPlus className='size-3.5' /> New folder
                 </DropdownMenuItem>
               ) : null}
+              {onNewFile ? (
+                <DropdownMenuItem onClick={onNewFile}>
+                  <FilePlus className='size-3.5' /> New file
+                </DropdownMenuItem>
+              ) : null}
               {onUpload ? (
                 <DropdownMenuItem onClick={onUpload}>
                   <Upload className='size-3.5' /> Upload
@@ -320,6 +390,12 @@ export function FileToolbar({
                   <DropdownMenuItem onClick={() => onViewChange?.('grid')}>
                     <LayoutGrid className='size-3.5' /> Grid view
                   </DropdownMenuItem>
+                </>
+              ) : null}
+              {sortItems ? (
+                <>
+                  <DropdownMenuSeparator />
+                  {sortItems}
                 </>
               ) : null}
             </DropdownMenuContent>

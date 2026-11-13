@@ -1,8 +1,10 @@
-import { exec, spawn } from 'node:child_process'
+import { exec, execFile, spawn } from 'node:child_process'
 import type { Readable } from 'node:stream'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
-import { joinPath as join, normalizePath as normalize, shellQuote } from './shared'
+import { createArgv, refuseTaken } from './create'
+import { joinPath as join, normalizePath as normalize } from './shared'
+import { shellQuote } from './shell'
 
 function run(distro: string | undefined, cmd: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -18,6 +20,21 @@ function run(distro: string | undefined, cmd: string): Promise<string> {
         resolve(stdout)
       },
     )
+  })
+}
+
+// Runs `argv` in the distro as a program (`wsl -e`), with no shell between:
+// unlike `run`, whose command line passes through the distro's default shell
+// first, nothing in `argv` is expanded or re-quoted on the way.
+function runArgv(distro: string | undefined, argv: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('wsl', [...(distro ? ['-d', distro] : []), '-e', ...argv], (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(stderr || err.message))
+        return
+      }
+      resolve(stdout)
+    })
   })
 }
 
@@ -103,7 +120,11 @@ export function wslProvider(ctx: TerminalContext): Provider {
     },
 
     async mkdir(path): Promise<void> {
-      await run(distro, `mkdir -p ${shellQuote(normalize(path))}`)
+      await refuseTaken(path, () => runArgv(distro, createArgv('directory', normalize(path))))
+    },
+
+    async createFile(path): Promise<void> {
+      await refuseTaken(path, () => runArgv(distro, createArgv('file', normalize(path))))
     },
   }
 }

@@ -1,8 +1,16 @@
+import type { AppsExport } from '@opencroft/server/apps'
 import type { Load } from '@opencroft/server/lifecycle'
 import { storage } from '@opencroft/server/storage'
 
+import { getProviderForRef } from './connections'
+import { fileManagerApp } from './places'
+import { transferRoutes } from './routes'
+
 export { actions } from './actions'
-export { routes } from './routes'
+
+export const routes = transferRoutes(getProviderForRef)
+
+export const apps: AppsExport = { 'file-manager': fileManagerApp }
 
 // The two storage keys from before connections were scoped to a space. Nothing
 // reads them any more — every live key carries its space, as "connections:<space>"

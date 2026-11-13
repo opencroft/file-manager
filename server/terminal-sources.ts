@@ -1,5 +1,7 @@
 import { graph, type HandleInfo } from '@opencroft/server/graph'
 
+import { spaceTerminals } from './space-terminals'
+
 export interface TerminalSourceInfo {
   /** `term:<nodeId>/<handleId>` — the source ref every action and route takes. */
   ref: string
@@ -22,6 +24,9 @@ function titleOf(handle: HandleInfo): string {
   return detail ? `${handle.nodeName} · ${detail}` : handle.nodeName
 }
 
+// What each space lists, for checking the refs callers name.
+const known = spaceTerminals(async (space) => (await readTerminalSources(space)).map((source) => source.ref))
+
 /**
  * The terminals of `space`: every terminal-context source handle a node on one
  * of its graphs declares, and every one an App instance added to it exposes (a
@@ -29,6 +34,24 @@ function titleOf(handle: HandleInfo): string {
  * the containers running, the worktrees present — so a stopped one is not listed.
  */
 export async function listTerminalSources(space: string): Promise<TerminalSourceInfo[]> {
+  const sources = await readTerminalSources(space)
+  known.remember(
+    space,
+    sources.map((source) => source.ref),
+  )
+  return sources
+}
+
+/**
+ * Resolves when `ref` is a terminal `space` lists (`listTerminalSources`), and
+ * rejects with NotInSpaceError when it is not: a space reaches its own
+ * terminals and no others, however the ref was learnt.
+ */
+export function requireTerminalInSpace(space: string, ref: string): Promise<void> {
+  return known.require(space, ref)
+}
+
+async function readTerminalSources(space: string): Promise<TerminalSourceInfo[]> {
   const handles = await graph.listHandles({
     role: 'source',
     handleType: TERMINAL_CONTEXT_HANDLE_TYPE,

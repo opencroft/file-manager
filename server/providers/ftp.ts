@@ -1,8 +1,9 @@
-import { PassThrough, type Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 
 import { Client, FileType } from 'basic-ftp'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, ResolvedFtpConfig } from '../types'
+import { alreadyExists } from './create'
 
 async function connect(config: ResolvedFtpConfig): Promise<Client> {
   const client = new Client()
@@ -86,7 +87,32 @@ export function ftpProvider(config: ResolvedFtpConfig): Provider {
     },
 
     async mkdir(path): Promise<void> {
-      await withClient(config, (client) => client.ensureDir(path))
+      await withClient(config, async (client) => {
+        await refuseExisting(client, path)
+        // One MKD, not ensureDir: a folder is created in its existing parent
+        // only, as Provider.mkdir says.
+        await client.send(`MKD ${path.replace(/\/+$/, '')}`)
+      })
     },
+
+    async createFile(path): Promise<void> {
+      await withClient(config, async (client) => {
+        await refuseExisting(client, path)
+        await client.uploadFrom(Readable.from([]), path)
+      })
+    },
+  }
+}
+
+// FTP has no create-if-absent for a file (STOR replaces), so a create looks in
+// the parent first. A create racing another to the same name between the look
+// and the write can still land second.
+async function refuseExisting(client: Client, path: string): Promise<void> {
+  const clean = path.replace(/\/+$/, '')
+  const slash = clean.lastIndexOf('/')
+  const parent = slash > 0 ? clean.slice(0, slash) : '/'
+  const name = clean.slice(slash + 1)
+  if ((await client.list(parent)).some((item) => item.name === name)) {
+    throw alreadyExists(path)
   }
 }

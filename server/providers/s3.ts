@@ -2,6 +2,7 @@ import {
   CopyObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
@@ -9,6 +10,7 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, ResolvedS3Config } from '../types'
+import { alreadyExists } from './create'
 
 const MULTIPART_PART_SIZE = 5 * 1024 * 1024
 const DELETE_BATCH_SIZE = 1000
@@ -193,10 +195,43 @@ export function s3Provider(config: ResolvedS3Config): Provider {
     },
 
     async mkdir(path): Promise<void> {
+      await refuseExisting(client, config.bucket, path)
       // S3-compatible endpoints may reject trailing-slash keys — a .keep marker
       // file inside the directory establishes the prefix instead.
       const dir = normalizePrefix(path.replace(/^\/+/, ''))
       await client.send(new PutObjectCommand({ Bucket: config.bucket, Key: `${dir}.keep`, Body: Buffer.from(' ') }))
     },
+
+    async createFile(path): Promise<void> {
+      await refuseExisting(client, config.bucket, path)
+      await client.send(
+        new PutObjectCommand({ Bucket: config.bucket, Key: path.replace(/^\/+/, ''), Body: Buffer.alloc(0) }),
+      )
+    },
+  }
+}
+
+// S3 has no create-if-absent for a folder, so a create looks first: an object
+// at the key is a file of that name, any key under "<key>/" a folder. A create
+// racing another to the same name between the look and the write can still
+// land second.
+async function refuseExisting(client: S3Client, bucket: string, path: string): Promise<void> {
+  const key = path.replace(/^\/+/, '').replace(/\/+$/, '')
+  const [file, folder] = await Promise.all([
+    client.send(new HeadObjectCommand({ Bucket: bucket, Key: key })).then(
+      () => true,
+      (err: { $metadata?: { httpStatusCode?: number } }) => {
+        if (err.$metadata?.httpStatusCode === 404) {
+          return false
+        }
+        throw err
+      },
+    ),
+    client
+      .send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `${key}/`, MaxKeys: 1 }))
+      .then((response) => (response.KeyCount ?? response.Contents?.length ?? 0) > 0),
+  ])
+  if (file || folder) {
+    throw alreadyExists(path)
   }
 }

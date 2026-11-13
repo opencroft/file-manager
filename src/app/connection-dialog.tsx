@@ -1,3 +1,4 @@
+import { SecretValueField } from '@opencroft/client/secrets'
 import {
   Button,
   ControlledInput,
@@ -39,11 +40,14 @@ function draftFrom(connection?: ProtocolConnection): ConnectionDraft {
 }
 
 export function ConnectionDialog({
+  spaceSlug,
   open,
   onOpenChange,
   connection,
   onSave,
 }: {
+  /** The space the connection belongs to: its credentials are picked from, and resolve in, its Secrets Stores. */
+  spaceSlug: string
   open: boolean
   onOpenChange: (open: boolean) => void
   connection?: ProtocolConnection
@@ -146,24 +150,18 @@ export function ConnectionDialog({
                   className='h-8 text-sm font-mono'
                 />
               </div>
-              <div className='flex flex-col gap-1.5'>
-                <Label className='text-xs'>Access key id</Label>
-                <ControlledInput
-                  value={s3.accessKeyId}
-                  onValueChanged={(v: string) => updateConfig({ accessKeyId: v })}
-                  placeholder='or secret:NAME'
-                  className='h-8 text-sm font-mono'
-                />
-              </div>
-              <div className='flex flex-col gap-1.5'>
-                <Label className='text-xs'>Secret access key</Label>
-                <ControlledInput
-                  value={s3.secretAccessKey}
-                  onValueChanged={(v: string) => updateConfig({ secretAccessKey: v })}
-                  placeholder='or secret:NAME'
-                  className='h-8 text-sm font-mono'
-                />
-              </div>
+              <SecretValueField
+                label='Access key id'
+                value={s3.accessKeyId}
+                onChange={(v) => updateConfig({ accessKeyId: v })}
+                spaceSlug={spaceSlug}
+              />
+              <SecretValueField
+                label='Secret access key'
+                value={s3.secretAccessKey}
+                onChange={(v) => updateConfig({ secretAccessKey: v })}
+                spaceSlug={spaceSlug}
+              />
             </>
           ) : null}
 
@@ -193,21 +191,14 @@ export function ConnectionDialog({
                   className='h-8 text-sm font-mono'
                 />
               </div>
-              <div className='flex flex-col gap-1.5'>
-                <Label className='text-xs'>Password</Label>
-                <ControlledInput
-                  value={ftp.password}
-                  onValueChanged={(v: string) => updateConfig({ password: v })}
-                  placeholder='or secret:NAME'
-                  className='h-8 text-sm font-mono'
-                />
-              </div>
+              <SecretValueField
+                label='Password'
+                value={ftp.password}
+                onChange={(v) => updateConfig({ password: v })}
+                spaceSlug={spaceSlug}
+              />
             </>
           ) : null}
-
-          <Label className='text-[10px] text-muted-foreground italic'>
-            Credential fields accept <code>secret:NAME</code> to resolve from the Secrets Store server-side.
-          </Label>
         </div>
 
         <DialogFooter>

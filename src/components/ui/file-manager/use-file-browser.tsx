@@ -1,12 +1,13 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { ComponentProps } from 'react'
 
-import type { ConnectionSidebar, PlaceSection } from '@/components/ui/file-manager/connection-sidebar'
-import type { FileEntryList, FileListState } from '@/components/ui/file-manager/file-entry-list'
-import type { FileEntry } from '@/components/ui/file-manager/file-entry-row'
-import type { FileToolbar, Crumb } from '@/components/ui/file-manager/file-toolbar'
-import type { TransfersTray } from '@/components/ui/file-manager/transfers-tray'
-import type { TransferItemData } from '@/components/ui/file-manager/transfer-item'
+import type { ConnectionSidebar, PlaceSection } from './connection-sidebar'
+import type { FileEntryList, FileListState } from './file-entry-list'
+import { DEFAULT_FILE_SORT, type FileEntry, type FileEntryKind, type FileSort, type FileSortKey } from './file-entry-row'
+import { FILE_KIND_LABEL, fileKind } from '@/components/ui/files/file-type-icon'
+import type { FileToolbar, Crumb } from './file-toolbar'
+import type { TransfersTray } from './transfers-tray'
+import type { TransferItemData } from './transfer-item'
 
 export type FileView = 'list' | 'grid'
 
@@ -33,7 +34,16 @@ export interface UseFileBrowserOptions {
   onDownload?: (entry: FileEntry) => void
   onRenameEntry?: (id: string, name: string) => void
   onDelete?: (entry: FileEntry) => void
-  onNewFolder?: () => void
+  // Create a folder / an empty file named `name` in the current location.
+  // Given, New folder / New file put a draft row in the listing in rename
+  // mode, and this is called once, when a name is confirmed that no entry
+  // already has. Escape, an empty name, or leaving the input calls nothing.
+  onCreateFolder?: (name: string) => void
+  onCreateFile?: (name: string) => void
+  onCopyPath?: (entry: FileEntry) => void
+  // A directory's Bookmark / Remove bookmark; `bookmarkedIds` says which it is.
+  onToggleBookmark?: (entry: FileEntry) => void
+  bookmarkedIds?: string[]
   onUpload?: () => void
   onFilesDrop?: (files: File[]) => void
   onRetry?: () => void
@@ -48,6 +58,7 @@ export interface UseFileBrowserOptions {
   initialPlaceId?: string
   initialPath?: Crumb[]
   initialView?: FileView
+  initialSort?: FileSort
 }
 
 export interface UseFileBrowser {
@@ -56,6 +67,7 @@ export interface UseFileBrowser {
   path: Crumb[]
   selection: string[]
   view: FileView
+  sort: FileSort
   searchValue: string
   canBack: boolean
   canForward: boolean
@@ -73,9 +85,48 @@ export interface UseFileBrowser {
   props: { places: PlacesSlice; toolbar: ToolbarSlice; listing: ListingSlice; transfers: TransfersSlice; sidebarOpen: boolean; onSidebarOpenChange: (open: boolean) => void }
 }
 
+const byName = (a: FileEntry, b: FileEntry) =>
+  a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+
+// An entry's value in a Date, Size or Type column; undefined when it has none
+// (no timestamp, or a folder's size).
+function columnValue(entry: FileEntry, key: Exclude<FileSortKey, 'name'>): number | string | undefined {
+  if (key === 'date') return entry.modifiedAt
+  if (key === 'size') return entry.kind === 'directory' ? undefined : entry.sizeBytes
+  return FILE_KIND_LABEL[fileKind(entry.name, entry.kind === 'directory')]
+}
+
+// The listing's order under `sort`: folders before files whichever the column
+// and direction, then by the column. Names compare case-insensitively and in
+// natural order ("file2" before "file10"). Entries equal in the column fall back
+// to name order, and an entry with no value goes after those with one.
+export function compareEntries(sort: FileSort): (a: FileEntry, b: FileEntry) => number {
+  const sign = sort.direction === 'asc' ? 1 : -1
+  const { key } = sort
+  return (a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'directory' ? -1 : 1
+    if (key === 'name') return sign * byName(a, b)
+    const va = columnValue(a, key)
+    const vb = columnValue(b, key)
+    if (va === undefined || vb === undefined) {
+      if (va !== vb) return va === undefined ? 1 : -1
+      return byName(a, b)
+    }
+    const order = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
+    return order === 0 ? byName(a, b) : sign * order
+  }
+}
+
+// Why `name` can't be given to a new entry beside `entries`, or undefined when
+// it can. Names compare exactly, as the listing shows them.
+export function newEntryNameError(entries: FileEntry[], name: string): string | undefined {
+  return entries.some((e) => e.name === name) ? `"${name}" already exists` : undefined
+}
+
 // Headless controller for the file browser. It owns every piece of pure-UI
 // state (active place, current path + back/forward/up history, selection, view
-// mode, inline-rename draft, transfers-tray expansion, search input) and derives
+// mode, sort, inline-rename and new-entry drafts, transfers-tray expansion,
+// search input), orders the entries by the sort (compareEntries) and derives
 // the can* flags internally, so hosts never compute them. It holds no data and
 // does no I/O: strings arrive host-formatted, search filtering stays host-side
 // (the hook only owns the input value), and the host is notified of navigation
@@ -93,7 +144,11 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     onDownload,
     onRenameEntry,
     onDelete,
-    onNewFolder,
+    onCreateFolder,
+    onCreateFile,
+    onCopyPath,
+    onToggleBookmark,
+    bookmarkedIds,
     onUpload,
     onFilesDrop,
     onRetry,
@@ -104,11 +159,12 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     initialPlaceId,
     initialPath,
     initialView = 'list',
+    initialSort = DEFAULT_FILE_SORT,
   } = options
 
   const firstPlaceId = sections[0]?.items[0]?.id ?? ''
-  const placeName = (id: string) =>
-    sections.flatMap((s) => s.items).find((p) => p.id === id)?.name ?? id
+  const findPlace = (id: string) => sections.flatMap((s) => s.items).find((p) => p.id === id)
+  const placeName = (id: string) => findPlace(id)?.name ?? id
 
   const [activePlaceId, setActivePlaceId] = useState<string>(initialPlaceId ?? firstPlaceId)
   const [path, setPath] = useState<Crumb[]>(() => {
@@ -121,15 +177,33 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
 
   const [selection, setSelection] = useState<string[]>([])
   const [view, setView] = useState<FileView>(initialView)
+  const [sort, setSort] = useState<FileSort>(initialSort)
   const [searchValue, setSearchValue] = useState('')
   const [trayOpen, setTrayOpen] = useState(false)
   // mobile sidebar drawer (shown as a popup when the sidebar collapses on
   // narrow widths)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  // inline-rename draft (single source of truth — no split between list + host)
+  // inline-rename draft (single source of truth — no split between list + host).
+  // A new entry being named shares the draft value: `creating` says which kind.
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [creating, setCreatingState] = useState<FileEntryKind | null>(null)
+  const [renameError, setRenameError] = useState<string | undefined>()
+  // `creating` as of the last change, read by the commit: two Enters can land
+  // before the re-render that ends the draft, and only the first may create.
+  const creatingRef = useRef<FileEntryKind | null>(null)
+  const setCreating = useCallback((kind: FileEntryKind | null) => {
+    creatingRef.current = kind
+    setCreatingState(kind)
+  }, [])
+
+  // Drops any rename or new entry in progress (navigation, a menu opening).
+  const endDrafts = useCallback(() => {
+    setRenamingId(null)
+    setCreating(null)
+    setRenameError(undefined)
+  }, [setCreating])
 
   const canBack = past.length > 0
   const canForward = future.length > 0
@@ -141,11 +215,11 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       setPast((p) => [...p, path])
       setFuture([])
       setSelection([])
-      setRenamingId(null)
+      endDrafts()
       setPath(next)
       onLocationChange?.(activePlaceId, next)
     },
-    [path, activePlaceId, onLocationChange],
+    [path, activePlaceId, onLocationChange, endDrafts],
   )
 
   const navigateToCrumb = useCallback(
@@ -163,10 +237,10 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     setPast(past.slice(0, -1))
     setFuture((f) => [path, ...f])
     setSelection([])
-    setRenamingId(null)
+    endDrafts()
     setPath(prev)
     onLocationChange?.(activePlaceId, prev)
-  }, [past, path, activePlaceId, onLocationChange])
+  }, [past, path, activePlaceId, onLocationChange, endDrafts])
 
   const forward = useCallback(() => {
     if (!future.length) return
@@ -174,29 +248,38 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     setFuture(future.slice(1))
     setPast((p) => [...p, path])
     setSelection([])
-    setRenamingId(null)
+    endDrafts()
     setPath(next)
     onLocationChange?.(activePlaceId, next)
-  }, [future, path, activePlaceId, onLocationChange])
+  }, [future, path, activePlaceId, onLocationChange, endDrafts])
 
   const up = useCallback(() => {
     if (path.length <= 1) return
     pushPath(path.slice(0, -1))
   }, [path, pushPath])
 
+  // A place opens at its root; one carrying a `location` (a bookmark, a recent
+  // folder) opens that folder of its place instead -- inside the active place
+  // as an ordinary move with history, elsewhere as a fresh start there.
   const activatePlace = useCallback(
     (id: string) => {
-      if (id === activePlaceId) return
-      setActivePlaceId(id)
-      const next = [{ id, name: placeName(id) }]
+      const location = findPlace(id)?.location
+      if (location && location.placeId === activePlaceId) {
+        pushPath(location.path)
+        return
+      }
+      if (!location && id === activePlaceId) return
+      const placeId = location?.placeId ?? id
+      const next = location?.path ?? [{ id, name: placeName(id) }]
+      setActivePlaceId(placeId)
       setPast([])
       setFuture([])
       setSelection([])
-      setRenamingId(null)
+      endDrafts()
       setPath(next)
-      onLocationChange?.(id, next)
+      onLocationChange?.(placeId, next)
     },
-    [activePlaceId, placeName, onLocationChange],
+    [activePlaceId, findPlace, placeName, pushPath, onLocationChange, endDrafts],
   )
 
   const activateEntry = useCallback(
@@ -216,38 +299,82 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     )
   }, [])
 
-  const startRename = useCallback((entry: FileEntry) => {
-    setRenamingId(entry.id)
-    setRenameValue(entry.name)
+  const startRename = useCallback(
+    (entry: FileEntry) => {
+      endDrafts()
+      setRenamingId(entry.id)
+      setRenameValue(entry.name)
+    },
+    [endDrafts],
+  )
+  const startCreate = useCallback(
+    (kind: FileEntryKind) => {
+      endDrafts()
+      setCreating(kind)
+      setRenameValue('')
+    },
+    [endDrafts, setCreating],
+  )
+  const changeRenameValue = useCallback((value: string) => {
+    setRenameValue(value)
+    setRenameError(undefined)
   }, [])
   const commitRename = useCallback(() => {
-    const id = renamingId
     const name = renameValue.trim()
+    const kind = creatingRef.current
+    if (kind) {
+      if (!name) {
+        endDrafts()
+        return
+      }
+      const error = newEntryNameError(entries, name)
+      if (error) {
+        setRenameError(error)
+        return
+      }
+      endDrafts()
+      if (kind === 'directory') onCreateFolder?.(name)
+      else onCreateFile?.(name)
+      return
+    }
+    const id = renamingId
     setRenamingId(null)
     if (id && name) onRenameEntry?.(id, name)
-  }, [renamingId, renameValue, onRenameEntry])
-  const cancelRename = useCallback(() => setRenamingId(null), [])
-  // a row menu opening cancels an in-flight rename
-  const handleMenuOpenChange = useCallback((open: boolean) => {
-    if (open) setRenamingId(null)
-  }, [])
+  }, [renamingId, renameValue, entries, onRenameEntry, onCreateFolder, onCreateFile, endDrafts])
+  // a row or list menu opening cancels an in-flight rename or new entry
+  const handleMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) endDrafts()
+    },
+    [endDrafts],
+  )
+
+  const newFolder = useMemo(() => (onCreateFolder ? () => startCreate('directory') : undefined), [onCreateFolder, startCreate])
+  const newFile = useMemo(() => (onCreateFile ? () => startCreate('file') : undefined), [onCreateFile, startCreate])
 
   // Each place's root, and each directory in the listing, as a page of its own
   // when the host says where that is (locationHref).
   const linkedSections = useMemo(
     () =>
       locationHref
-        ? sections.map((s) => ({ ...s, items: s.items.map((p) => ({ ...p, href: locationHref(p.id) ?? p.href })) }))
+        ? sections.map((s) => ({
+            ...s,
+            items: s.items.map((p) => {
+              const target = p.location
+                ? locationHref(p.location.placeId, p.location.path[p.location.path.length - 1]?.id)
+                : locationHref(p.id)
+              return { ...p, href: target ?? p.href }
+            }),
+          }))
         : sections,
     [sections, locationHref],
   )
-  const linkedEntries = useMemo(
-    () =>
-      locationHref
-        ? entries.map((e) => (e.kind === 'directory' ? { ...e, href: locationHref(activePlaceId, e.id) ?? e.href } : e))
-        : entries,
-    [entries, locationHref, activePlaceId],
-  )
+  const linkedEntries = useMemo(() => {
+    const ordered = [...entries].sort(compareEntries(sort))
+    return locationHref
+      ? ordered.map((e) => (e.kind === 'directory' ? { ...e, href: locationHref(activePlaceId, e.id) ?? e.href } : e))
+      : ordered
+  }, [entries, sort, locationHref, activePlaceId])
 
   const places = useMemo<PlacesSlice>(
     () => ({ sections: linkedSections, activePlaceId, onPlaceActivate: activatePlace, onAddConnection }),
@@ -283,10 +410,13 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       view,
       onViewChange: setView,
       showViewToggle: true,
-      onNewFolder,
+      sort,
+      onSortChange: setSort,
+      onNewFolder: newFolder,
+      onNewFile: newFile,
       onUpload,
     }),
-    [shownPath, navigateToCrumb, back, canBack, forward, canForward, up, canUp, onRefresh, searchValue, view, onNewFolder, onUpload],
+    [shownPath, navigateToCrumb, back, canBack, forward, canForward, up, canUp, onRefresh, searchValue, view, sort, newFolder, newFile, onUpload],
   )
 
   const listing = useMemo<ListingSlice>(
@@ -295,6 +425,8 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       state,
       errorMessage,
       view,
+      sort,
+      onSortChange: setSort,
       selectedIds: selection,
       onActivate: activateEntry,
       onSelect: select,
@@ -302,16 +434,24 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       onRename: startRename,
       renamingId,
       renameValue,
-      onRenameChange: setRenameValue,
+      onRenameChange: changeRenameValue,
       onRenameCommit: commitRename,
-      onRenameCancel: cancelRename,
+      onRenameCancel: endDrafts,
+      renameError,
+      creating,
       onMenuOpenChange: handleMenuOpenChange,
       onDelete,
-      onNewFolder,
+      onCopyPath,
+      onToggleBookmark,
+      bookmarkedIds,
+      onNewFolder: newFolder,
+      onNewFile: newFile,
+      onUpload,
+      onRefresh,
       onFilesDrop,
       onRetry,
     }),
-    [linkedEntries, state, errorMessage, view, selection, activateEntry, select, onDownload, startRename, renamingId, renameValue, commitRename, cancelRename, handleMenuOpenChange, onDelete, onNewFolder, onFilesDrop, onRetry],
+    [linkedEntries, state, errorMessage, view, sort, selection, activateEntry, select, onDownload, startRename, renamingId, renameValue, changeRenameValue, commitRename, endDrafts, renameError, creating, handleMenuOpenChange, onDelete, onCopyPath, onToggleBookmark, bookmarkedIds, newFolder, newFile, onUpload, onRefresh, onFilesDrop, onRetry],
   )
 
   const transfersSlice = useMemo<TransfersSlice>(
@@ -343,6 +483,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     path,
     selection,
     view,
+    sort,
     searchValue,
     canBack,
     canForward,

@@ -36,6 +36,11 @@ async function mkdirAction(space: string, source: string, path: string) {
   return { ok: true }
 }
 
+async function createFileAction(space: string, source: string, path: string) {
+  await (await providerFor(space, source)).createFile(requireString(path, 'path'))
+  return { ok: true }
+}
+
 async function renameAction(space: string, source: string, oldPath: string, newPath: string) {
   await (await providerFor(space, source)).rename(requireString(oldPath, 'oldPath'), requireString(newPath, 'newPath'))
   return { ok: true }
@@ -86,6 +91,7 @@ async function setSourceSettingsAction(space: string, ref: string, settings: Sou
 export const actions = {
   list: listAction,
   mkdir: mkdirAction,
+  createFile: createFileAction,
   rename: renameAction,
   delete: deleteAction,
   testConnection: testConnectionAction,

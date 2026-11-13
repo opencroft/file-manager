@@ -1,14 +1,16 @@
 import { invoke } from '@opencroft/client/actions'
 import { routeUrl } from '@opencroft/client/extension'
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
+import type { PlaceSection } from '@/components/ui/file-manager/connection-sidebar'
 import type { FileListState } from '@/components/ui/file-manager/file-entry-list'
 import type { FileEntry as KitFileEntry } from '@/components/ui/file-manager/file-entry-row'
 import type { Crumb } from '@/components/ui/file-manager/file-toolbar'
 import type { TransferItemData } from '@/components/ui/file-manager/transfer-item'
-import { formatModified, formatSize, formatSpeed, joinPath, parentPath } from '@/lib/format'
+import { formatModified, formatSize, formatSpeed, fullPath, joinPath, listingPath, parentPath } from '@/lib/format'
 import { placeOpeningPath, type SettledPlace } from './place-opening'
+import type { PlaceRef } from './types'
 
 const MAX_LIST_PAGES = 20
 
@@ -26,12 +28,15 @@ interface ListResult {
 }
 
 function toKitEntry(entry: ProviderFileEntry): KitFileEntry {
+  const modifiedAt = entry.modified ? new Date(entry.modified).getTime() : Number.NaN
   return {
     id: entry.path,
     name: entry.name,
     kind: entry.type,
     size: entry.type === 'file' ? formatSize(entry.size) : undefined,
+    sizeBytes: entry.type === 'file' ? entry.size : undefined,
     modified: entry.modified ? formatModified(entry.modified) : undefined,
+    modifiedAt: Number.isNaN(modifiedAt) ? undefined : modifiedAt,
   }
 }
 
@@ -65,11 +70,7 @@ interface TransferHandle {
 }
 
 export interface FileManagerHost {
-  sections: {
-    id: string
-    label?: string
-    items: { id: string; name: string; icon?: ReactNode; menu?: ReactNode }[]
-  }[]
+  sections: PlaceSection[]
   entries: KitFileEntry[]
   state: FileListState
   errorMessage?: string
@@ -81,18 +82,44 @@ export interface FileManagerHost {
   onDownload: (entry: KitFileEntry) => void
   onRenameEntry: (id: string, name: string) => void
   onDelete: (entry: KitFileEntry) => void
-  onNewFolder: () => void
+  onCreateFolder: (name: string) => void
+  onCreateFile: (name: string) => void
+  onCopyPath: (entry: KitFileEntry) => void
+  onToggleBookmark?: (entry: KitFileEntry) => void
+  bookmarkedIds: string[]
   onUpload: () => void
   onFilesDrop: (files: File[]) => void
   onCancelTransfer: (id: string) => void
   onRetryTransfer: (id: string) => void
 }
 
+export interface FileManagerHostOptions {
+  space: string
+  sections: PlaceSection[]
+  defaultPlaceId: string
+  initialPath?: string
+  onLocationSettled?: (source: string, path: string) => void
+  /** The root path configured for `defaultPlaceId`. Changing it re-roots browsing,
+   *  so the host reloads from "/" rather than leaving the previous listing on
+   *  screen. Undefined when that source has no root configured. */
+  activeRootPath?: string
+  /** The person's bookmarked folders: those in the listing offer Remove bookmark. */
+  bookmarks?: PlaceRef[]
+  /** Bookmark a folder, or remove its bookmark. Given, terminal folders offer it. */
+  onToggleBookmark?: (place: PlaceRef) => void
+  /** A folder files were just uploaded into or downloaded from. */
+  onFolderUsed?: (place: PlaceRef) => void
+}
+
+// Bookmarks and Recent hold terminal folders only.
+const isTerminalSource = (source: string) => source.startsWith('term:')
+
 /**
- * Wires the headless use-file-browser hook to the extension's list/mkdir/rename/
- * delete actions and streaming upload/download routes. `sections`' item ids ARE
- * source refs (`term:<nodeId>/<handleId>` or `conn:<id>`) — the active place id is
- * used directly as the `source` param everywhere, no per-node lookup involved.
+ * Wires the headless use-file-browser hook to the extension's list/mkdir/
+ * createFile/rename/delete actions and streaming upload/download routes.
+ * `sections`' item ids ARE source refs (`term:<nodeId>/<handleId>` or
+ * `conn:<id>`) — the active place id is used directly as the `source` param
+ * everywhere, no per-node lookup involved.
  *
  * `space` accompanies every call because connections and root paths are stored
  * per space, so a ref alone does not say which ones to resolve it against.
@@ -101,14 +128,17 @@ export interface FileManagerHost {
  * `defaultPlaceId`, and it is here because changing it re-roots browsing: see
  * the effect below.
  */
-export function useFileManagerHost(
-  space: string,
-  sections: FileManagerHost['sections'],
-  defaultPlaceId: string,
-  initialPath?: string,
-  onLocationSettled?: (source: string, path: string) => void,
-  activeRootPath?: string,
-): FileManagerHost {
+export function useFileManagerHost({
+  space,
+  sections,
+  defaultPlaceId,
+  initialPath,
+  onLocationSettled,
+  activeRootPath,
+  bookmarks,
+  onToggleBookmark,
+  onFolderUsed,
+}: FileManagerHostOptions): FileManagerHost {
   const [activePlaceId, setActivePlaceId] = useState(defaultPlaceId)
   const [currentPath, setCurrentPath] = useState(initialPath || '/')
   const [entries, setEntries] = useState<KitFileEntry[]>([])
@@ -172,6 +202,9 @@ export function useFileManagerHost(
   // runs mount effects twice), and a re-run must not reopen the place at "/"
   // over the deep-link path its first run is loading.
   const settledPlace = useRef<SettledPlace | undefined>(undefined)
+  // The place onLocationChange last moved to, until the effect below has seen
+  // the caller report it back as the default place.
+  const navigatedTo = useRef<string | undefined>(undefined)
 
   // Opens the default place when it, or its root path, changes. A re-rooted
   // source is a new location rather than a refresh, since every path held is
@@ -184,13 +217,15 @@ export function useFileManagerHost(
       if (settledPlace.current) {
         settledPlace.current = { ...settledPlace.current, placeId: '' }
       }
+      navigatedTo.current = undefined
       setState('empty')
       setEntries([])
       return
     }
     const next: SettledPlace = { space, placeId: defaultPlaceId, rootPath: activeRootPath }
-    const path = placeOpeningPath(settledPlace.current, next, initialPath)
+    const path = placeOpeningPath(settledPlace.current, next, initialPath, navigatedTo.current)
     settledPlace.current = next
+    navigatedTo.current = undefined
     if (path === undefined) {
       return
     }
@@ -206,11 +241,14 @@ export function useFileManagerHost(
       // initialPath from us). Only crumbs beyond the root carry a real path,
       // since those come from entry.id in activateEntry. So root always means "/".
       const target = path.length <= 1 ? '/' : path[path.length - 1].id
+      if (placeId !== activePlaceId) {
+        navigatedTo.current = placeId
+      }
       setActivePlaceId(placeId)
       setCurrentPath(target)
       load(placeId, target)
     },
-    [load],
+    [load, activePlaceId],
   )
 
   const refresh = useCallback(() => load(activePlaceId, currentPath), [load, activePlaceId, currentPath])
@@ -230,13 +268,57 @@ export function useFileManagerHost(
     [space, activePlaceId, refresh],
   )
 
-  const onNewFolder = useCallback(() => {
-    const name = window.prompt('New folder name:')?.trim()
-    if (!name) {
-      return
+  // One request each, with the confirmed name: the kit hook calls these only
+  // once a name is confirmed, and the server refuses a name already taken.
+  const onCreateFolder = useCallback(
+    (name: string) => runAction('mkdir', [joinPath(currentPath, name)]),
+    [runAction, currentPath],
+  )
+  const onCreateFile = useCallback(
+    (name: string) => runAction('createFile', [joinPath(currentPath, name)]),
+    [runAction, currentPath],
+  )
+
+  const onCopyPath = useCallback(
+    async (entry: KitFileEntry) => {
+      const path = fullPath(activeRootPath, entry.id)
+      try {
+        await navigator.clipboard.writeText(path)
+        toast.success(`Copied ${path}`)
+      } catch (err) {
+        toast.error(`Could not copy the path: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+    [activeRootPath],
+  )
+
+  // Places hold full paths (what Copy path gives), so a root path change
+  // cannot point them at another folder; entries are matched through the
+  // active root, and a bookmark outside it marks no entry.
+  const bookmarkedIds = useMemo(
+    () =>
+      (bookmarks ?? [])
+        .filter((b) => b.source === activePlaceId)
+        .map((b) => listingPath(activeRootPath, b.path))
+        .filter((id): id is string => id !== undefined),
+    [bookmarks, activePlaceId, activeRootPath],
+  )
+  const toggleEntryBookmark = useCallback(
+    (entry: KitFileEntry) => onToggleBookmark?.({ source: activePlaceId, path: fullPath(activeRootPath, entry.id) }),
+    [onToggleBookmark, activePlaceId, activeRootPath],
+  )
+
+  // Reported for terminal folders only, through a ref so the transfer
+  // callbacks below need not change identity with the caller's.
+  const onFolderUsedRef = useRef(onFolderUsed)
+  useEffect(() => {
+    onFolderUsedRef.current = onFolderUsed
+  })
+  const folderUsed = useCallback((source: string, rootPath: string | undefined, path: string) => {
+    if (isTerminalSource(source)) {
+      onFolderUsedRef.current?.({ source, path: fullPath(rootPath, path) })
     }
-    runAction('mkdir', [joinPath(currentPath, name)])
-  }, [runAction, currentPath])
+  }, [])
 
   const onRenameEntry = useCallback(
     (id: string, name: string) => {
@@ -252,8 +334,7 @@ export function useFileManagerHost(
     (entry: KitFileEntry) => {
       // Directory delete is recursive server-side — confirm before a slip
       // on a folder becomes data loss. A proper dialog can replace this
-      // window.confirm once the design kit has one (matches the New-folder
-      // window.prompt already used here).
+      // window.confirm once the design kit has one.
       const kind = entry.kind === 'directory' ? 'folder (and everything in it)' : 'file'
       if (!window.confirm(`Delete ${kind} "${entry.name}"?`)) {
         return
@@ -267,8 +348,9 @@ export function useFileManagerHost(
     (entry: KitFileEntry) => {
       const url = `${routeUrl('download')}?space=${encodeURIComponent(space)}&source=${encodeURIComponent(activePlaceId)}&path=${encodeURIComponent(entry.id)}`
       window.open(url, '_blank')
+      folderUsed(activePlaceId, activeRootPath, currentPath)
     },
-    [space, activePlaceId],
+    [space, activePlaceId, activeRootPath, currentPath, folderUsed],
   )
 
   const startUpload = useCallback(
@@ -306,6 +388,7 @@ export function useFileManagerHost(
           transferHandles.current.delete(id)
           setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, progress: 100, state: 'complete' } : t)))
           refresh()
+          folderUsed(activePlaceId, activeRootPath, currentPath)
         } else {
           // Keep the handle (and its file) around — a failed transfer can be retried.
           setTransfers((prev) =>
@@ -326,7 +409,7 @@ export function useFileManagerHost(
       xhr.open('POST', url)
       xhr.send(file)
     },
-    [space, activePlaceId, currentPath, refresh],
+    [space, activePlaceId, activeRootPath, currentPath, refresh, folderUsed],
   )
 
   const onFilesDrop = useCallback(
@@ -380,7 +463,11 @@ export function useFileManagerHost(
     onDownload,
     onRenameEntry,
     onDelete,
-    onNewFolder,
+    onCreateFolder,
+    onCreateFile,
+    onCopyPath,
+    onToggleBookmark: onToggleBookmark && isTerminalSource(activePlaceId) ? toggleEntryBookmark : undefined,
+    bookmarkedIds,
     onUpload,
     onFilesDrop,
     onCancelTransfer,

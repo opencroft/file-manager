@@ -6,12 +6,16 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react
 import { toast } from 'sonner'
 
 import { ContextMenuItem } from '@/components/ui/context-menu'
+import type { PlaceItem } from '@/components/ui/file-manager/connection-sidebar'
+import { folderName, listingPath } from '@/lib/format'
 import { ConnectionDialog, type ConnectionDraft } from './connection-dialog'
+import { crumbsFor } from './crumbs'
 import { readDeepLink, writeDeepLink } from './deep-link'
 import { FileManagerBrowser } from './file-manager-browser'
 import { RootPathDialog } from './root-path-dialog'
-import type { ListSourcesResult, ProtocolConnection } from './types'
+import type { ListSourcesResult, PlaceRef, ProtocolConnection, TerminalSourceInfo } from './types'
 import type { FileManagerHost } from './use-file-manager-host'
+import { usePlaces } from './use-places'
 
 const CONNECTION_ICON: Record<ProtocolConnection['type'], ReactNode> = {
   s3: <Cloud className='size-4' />,
@@ -48,13 +52,46 @@ function connectionMenu(onEdit: () => void, onRemove: () => void, onSetRootPath:
   )
 }
 
+// A bookmarked or recent folder as a sidebar row: the folder's name (the
+// terminal's own for its root), its terminal under it, a pin, and the folder
+// as the place it opens. Places hold the folder's full path, so the listing
+// path is worked out against the terminal's root path as it is now; a folder
+// outside that root is shown as unreachable rather than opened somewhere
+// else. Undefined for a folder whose terminal the space does not list, so a
+// removed terminal's folders drop out of the sidebar.
+function folderItem(
+  kind: 'bookmark' | 'recent',
+  place: PlaceRef,
+  terminals: TerminalSourceInfo[],
+  rootPath: string | undefined,
+  pin: PlaceItem['pin'],
+): PlaceItem | undefined {
+  const terminal = terminals.find((t) => t.ref === place.source)
+  if (!terminal) {
+    return undefined
+  }
+  const path = listingPath(rootPath, place.path)
+  return {
+    id: `${kind}:${place.source}:${place.path}`,
+    name: folderName(place.path) || terminal.title,
+    detail: <TerminalRef target={place.source.slice('term:'.length)} className='gap-1 [&>svg]:size-3' />,
+    pin,
+    ...(path === undefined
+      ? { unreachable: `Outside the root path ${rootPath}` }
+      : { location: { placeId: place.source, path: crumbsFor(place.source, terminal.title, path) } }),
+  }
+}
+
+const isPlaceItem = (item: PlaceItem | undefined): item is PlaceItem => item !== undefined
+
 /**
  * The File Manager App's view (see `provides.apps` in extension.json).
  *
  * Connections and root paths belong to the space this instance was added to,
  * so `spaceSlug` accompanies every call that reads or writes them.
  */
-export function FileManagerApp({ spaceSlug }: AppComponentProps) {
+export function FileManagerApp({ instanceId, spaceSlug }: AppComponentProps) {
+  const { places, recordRecent, addBookmark, removeBookmark, toggleBookmark } = usePlaces(instanceId)
   const [initialLink] = useState(readDeepLink)
   const [sources, setSources] = useState<ListSourcesResult>(EMPTY_SOURCES)
   // Flips false -> true exactly once, the first time listSources resolves — keys
@@ -141,6 +178,31 @@ export function FileManagerApp({ spaceSlug }: AppComponentProps) {
 
   const sections = useMemo<FileManagerHost['sections']>(() => {
     const result: FileManagerHost['sections'] = []
+    const bookmarks = places.bookmarks
+      .map((b) =>
+        folderItem('bookmark', b, sources.terminalSources, sources.sourceSettings[b.source]?.rootPath, {
+          pinned: true,
+          label: 'Remove bookmark',
+          onToggle: () => removeBookmark(b),
+        }),
+      )
+      .filter(isPlaceItem)
+    if (bookmarks.length) {
+      result.push({ id: 'bookmarks', label: 'Bookmarks', items: bookmarks })
+    }
+    // The server keeps a bookmarked folder out of Recent, so every Recent pin bookmarks.
+    const recent = places.recent
+      .map((r) =>
+        folderItem('recent', r, sources.terminalSources, sources.sourceSettings[r.source]?.rootPath, {
+          pinned: false,
+          label: 'Bookmark',
+          onToggle: () => addBookmark(r),
+        }),
+      )
+      .filter(isPlaceItem)
+    if (recent.length) {
+      result.push({ id: 'recent', label: 'Recent', items: recent })
+    }
     if (sources.connections.length) {
       result.push({
         id: 'connections',
@@ -176,15 +238,17 @@ export function FileManagerApp({ spaceSlug }: AppComponentProps) {
       })
     }
     return result
-  }, [sources, editConnection, removeConnection])
+  }, [sources, editConnection, removeConnection, places, addBookmark, removeBookmark])
 
+  // A connection or a terminal, never a Bookmarks or Recent row: those sit first
+  // in the sidebar but are folders on a source, not a source to open at its root.
   const defaultPlaceId = useMemo(() => {
-    const allIds = sections.flatMap((s) => s.items.map((i) => i.id))
-    if (activeSource && allIds.includes(activeSource)) {
+    const sourceIds = [...sources.connections.map((c) => `conn:${c.id}`), ...sources.terminalSources.map((s) => s.ref)]
+    if (activeSource && sourceIds.includes(activeSource)) {
       return activeSource
     }
-    return allIds[0] ?? ''
-  }, [sections, activeSource])
+    return sourceIds[0] ?? ''
+  }, [sources, activeSource])
 
   const handleLocationSettled = useCallback((source: string, path: string) => {
     setActiveSource(source)
@@ -215,8 +279,17 @@ export function FileManagerApp({ spaceSlug }: AppComponentProps) {
         initialPath={initialLink.path || undefined}
         onLocationSettled={handleLocationSettled}
         onAddConnection={openAddDialog}
+        bookmarks={places.bookmarks}
+        onToggleBookmark={toggleBookmark}
+        onFolderUsed={recordRecent}
       />
-      <ConnectionDialog open={dialogOpen} onOpenChange={setDialogOpen} connection={editing} onSave={saveConnection} />
+      <ConnectionDialog
+        spaceSlug={spaceSlug}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        connection={editing}
+        onSave={saveConnection}
+      />
       <RootPathDialog
         open={rootPathTarget !== undefined}
         onOpenChange={(open) => {

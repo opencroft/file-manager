@@ -30,6 +30,18 @@ export interface SourceSettings {
   rootPath?: string
 }
 
+/** A folder on one terminal source by its full path, as the App's `places` actions answer it (server/place-lists.ts). */
+export interface PlaceRef {
+  source: string
+  path: string
+}
+
+/** The signed-in person's Bookmarks and Recent folders, newest first. */
+export interface Places {
+  bookmarks: PlaceRef[]
+  recent: PlaceRef[]
+}
+
 export interface ListSourcesResult {
   connections: ProtocolConnection[]
   terminalSources: TerminalSourceInfo[]

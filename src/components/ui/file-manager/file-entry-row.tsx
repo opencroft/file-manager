@@ -1,5 +1,5 @@
 import { type ChangeEvent, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { Download, File, Folder, FolderPlus, Pencil, Trash2 } from 'lucide-react'
+import { Copy, Download, FilePlus, FolderPlus, Pencil, Pin, PinOff, Trash2 } from 'lucide-react'
 
 import {
   ContextMenu,
@@ -7,6 +7,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
+import { FILE_KIND_LABEL, FileTypeIcon, fileKind } from '@/components/ui/files/file-type-icon'
 import { cn } from 'cn'
 
 export type FileEntryKind = 'file' | 'directory'
@@ -19,13 +20,43 @@ export interface FileEntry {
   kind: FileEntryKind
   size?: string
   modified?: string
+  // The raw values a Size or Date sort orders by (bytes, epoch milliseconds);
+  // `size` and `modified` are only what is shown.
+  sizeBytes?: number
+  modifiedAt?: number
   // A page of its own for this entry (a directory's location), opened in a new tab on a middle-click.
   // Host-built; none means no new-tab gesture.
   href?: string
 }
 
-// Extra row-menu actions beyond the built-in New folder / Download / Rename /
-// Delete.
+// The order of a listing: by which column, which way. Folders come before
+// files under every sort.
+export type FileSortKey = 'name' | 'date' | 'type' | 'size'
+export interface FileSort {
+  key: FileSortKey
+  direction: 'asc' | 'desc'
+}
+
+export const DEFAULT_FILE_SORT: FileSort = { key: 'name', direction: 'asc' }
+
+export const FILE_SORT_LABEL: Record<FileSortKey, string> = {
+  name: 'Name',
+  date: 'Date',
+  type: 'Type',
+  size: 'Size',
+}
+
+// What a surface that opens a context menu on long press sets on itself: the
+// browser's own long-press behaviour (iOS callout, text selection) is off, and
+// vertical scrolling still pans the list.
+export const MENU_TRIGGER_TOUCH_STYLE: CSSProperties = {
+  touchAction: 'pan-y',
+  WebkitTouchCallout: 'none',
+  userSelect: 'none',
+}
+
+// Extra row-menu actions beyond the built-in New folder / New file / Download /
+// Copy path / Bookmark / Rename / Delete.
 export interface FileEntryRowAction {
   label: string
   onSelect: (id: string) => void
@@ -50,11 +81,6 @@ function middleClickOpens(href: string | undefined) {
   }
 }
 
-const KIND_LABEL: Record<FileEntryKind, string> = {
-  file: 'File',
-  directory: 'Folder',
-}
-
 interface FileEntryRowProps {
   entry: FileEntry
   // 'table' (native table row, columns) by default, 'card' for a grid tile,
@@ -68,6 +94,13 @@ interface FileEntryRowProps {
   onRenameChange?: (value: string) => void
   onRenameCommit?: () => void
   onRenameCancel?: () => void
+  // Why the typed name can't be used ("already exists"): the input is marked
+  // invalid and the reason shows beside it. The input stays open.
+  renameError?: string
+  // What leaving the input does: 'commit' (the default) confirms the typed
+  // name, as Rename does; 'cancel' drops it, for a row that only exists once a
+  // name is confirmed.
+  renameBlur?: 'commit' | 'cancel'
   // Open a directory / open a file (double-click or Enter).
   onActivate?: (entry: FileEntry) => void
   // `additive` is true for shift/meta/ctrl range/selection extension.
@@ -76,6 +109,12 @@ interface FileEntryRowProps {
   onRename?: (entry: FileEntry) => void
   onDelete?: (entry: FileEntry) => void
   onNewFolder?: () => void
+  onNewFile?: () => void
+  onCopyPath?: (entry: FileEntry) => void
+  // A directory's Bookmark / Remove bookmark item; `bookmarked` says which.
+  // Files never show it.
+  onToggleBookmark?: (entry: FileEntry) => void
+  bookmarked?: boolean
   actions?: FileEntryRowAction[]
   // Notified when the context menu opens/closes. The row leaves `ContextMenu`
   // uncontrolled -- it opens natively on right-click (desktop) or long-press
@@ -104,47 +143,66 @@ export function FileEntryRow({
   onRenameChange,
   onRenameCommit,
   onRenameCancel,
+  renameError,
+  renameBlur = 'commit',
   onActivate,
   onSelect,
   onDownload,
   onRename,
   onDelete,
   onNewFolder,
+  onNewFile,
+  onCopyPath,
+  onToggleBookmark,
+  bookmarked = false,
   actions,
   onMenuOpenChange,
   className,
 }: FileEntryRowProps) {
-  const hasMenu = Boolean(onDownload || onRename || onDelete || onNewFolder || actions?.length)
-  const Icon = entry.kind === 'directory' ? Folder : File
+  const directory = entry.kind === 'directory'
+  const bookmarkItem = directory ? onToggleBookmark : undefined
+  const hasMenu = Boolean(
+    onDownload || onRename || onDelete || onNewFolder || onNewFile || onCopyPath || bookmarkItem || actions?.length,
+  )
 
   // The row stays non-selectable / scroll-friendly, except while renaming the
   // name needs text selection and a caret.
-  const touchStyle: CSSProperties = renaming
-    ? { touchAction: 'auto', userSelect: 'text' }
-    : { touchAction: 'pan-y', WebkitTouchCallout: 'none', userSelect: 'none' }
+  const touchStyle: CSSProperties = renaming ? { touchAction: 'auto', userSelect: 'text' } : MENU_TRIGGER_TOUCH_STYLE
 
   const nameInput = renaming ? (
-    <input
-      autoFocus
-      onFocus={(e) => e.currentTarget.select()}
-      {...(onRenameChange
-        ? { value: renameValue ?? entry.name, onChange: (e: ChangeEvent<HTMLInputElement>) => onRenameChange(e.target.value) }
-        : { defaultValue: entry.name })}
-      onClick={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault()
-          onRenameCommit?.()
-        } else if (e.key === 'Escape') {
-          e.preventDefault()
-          onRenameCancel?.()
-        }
-      }}
-      onBlur={() => onRenameCommit?.()}
-      className='min-w-0 flex-1 rounded-sm bg-background px-1 py-0.5 text-xs text-foreground outline-none ring-1 ring-ring'
-    />
+    <span className='flex min-w-0 flex-1 items-center gap-2'>
+      <input
+        autoFocus
+        aria-label='Name'
+        aria-invalid={renameError ? true : undefined}
+        onFocus={(e) => e.currentTarget.select()}
+        {...(onRenameChange
+          ? { value: renameValue ?? entry.name, onChange: (e: ChangeEvent<HTMLInputElement>) => onRenameChange(e.target.value) }
+          : { defaultValue: entry.name })}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            onRenameCommit?.()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            onRenameCancel?.()
+          }
+        }}
+        onBlur={() => (renameBlur === 'cancel' ? onRenameCancel?.() : onRenameCommit?.())}
+        className={cn(
+          'min-w-0 flex-1 rounded-sm bg-background px-1 py-0.5 text-xs text-foreground outline-none ring-1',
+          renameError ? 'ring-destructive' : 'ring-ring',
+        )}
+      />
+      {renameError ? (
+        <span role='alert' className='shrink-0 text-xs text-destructive'>
+          {renameError}
+        </span>
+      ) : null}
+    </span>
   ) : null
 
   const menuContent = hasMenu ? (
@@ -155,10 +213,28 @@ export function FileEntryRow({
           New folder
         </ContextMenuItem>
       ) : null}
+      {onNewFile ? (
+        <ContextMenuItem onClick={() => onNewFile()}>
+          <FilePlus className='size-3' />
+          New file
+        </ContextMenuItem>
+      ) : null}
       {onDownload ? (
         <ContextMenuItem onClick={() => onDownload(entry)}>
           <Download className='size-3' />
           Download
+        </ContextMenuItem>
+      ) : null}
+      {onCopyPath ? (
+        <ContextMenuItem onClick={() => onCopyPath(entry)}>
+          <Copy className='size-3' />
+          Copy path
+        </ContextMenuItem>
+      ) : null}
+      {bookmarkItem ? (
+        <ContextMenuItem onClick={() => bookmarkItem(entry)}>
+          {bookmarked ? <PinOff className='size-3' /> : <Pin className='size-3' />}
+          {bookmarked ? 'Remove bookmark' : 'Bookmark'}
         </ContextMenuItem>
       ) : null}
       {actions?.length
@@ -221,12 +297,12 @@ export function FileEntryRow({
       >
         <td className='py-1.5 pl-2 pr-2 align-middle'>
           <div className='flex items-center gap-2'>
-            <Icon className='size-4 shrink-0 text-muted-foreground' aria-hidden />
+            <FileTypeIcon name={entry.name} directory={directory} />
             {renaming ? nameInput : <span className='truncate text-xs font-medium text-foreground'>{entry.name}</span>}
           </div>
         </td>
         <td className='py-1.5 pr-2 align-middle text-xs text-muted-foreground'>{entry.modified ?? '—'}</td>
-        <td className='py-1.5 pr-2 align-middle text-xs text-muted-foreground'>{KIND_LABEL[entry.kind]}</td>
+        <td className='py-1.5 pr-2 align-middle text-xs text-muted-foreground'>{FILE_KIND_LABEL[fileKind(entry.name, directory)]}</td>
         <td className='py-1.5 pr-2 text-right align-middle text-xs text-muted-foreground'>{entry.size ?? '—'}</td>
       </tr>
     )
@@ -243,13 +319,13 @@ export function FileEntryRow({
   const content =
     variant === 'card' ? (
       <div className='flex w-full min-w-0 flex-col items-center gap-1 px-1 py-2 text-center'>
-        <Icon className='size-6 shrink-0 text-muted-foreground' aria-hidden />
+        <FileTypeIcon name={entry.name} directory={directory} size='lg' />
         {renaming ? nameInput : <span className='w-full break-words text-xs text-foreground'>{entry.name}</span>}
         {entry.size ? <span className='shrink-0 text-xs text-muted-foreground'>{entry.size}</span> : null}
       </div>
     ) : (
       <div className='flex w-full min-w-0 items-center gap-2 py-1 pl-1 pr-2 text-left'>
-        <Icon className='size-4 shrink-0 text-muted-foreground' aria-hidden />
+        <FileTypeIcon name={entry.name} directory={directory} />
         {renaming ? nameInput : <span className='min-w-0 flex-1 truncate text-xs font-medium text-foreground'>{entry.name}</span>}
         {entry.size ? <span className='ml-auto shrink-0 pl-2 text-xs text-muted-foreground'>{entry.size}</span> : null}
         {entry.modified ? (

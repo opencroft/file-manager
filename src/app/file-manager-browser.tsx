@@ -3,8 +3,9 @@ import { useState } from 'react'
 import { FileBrowser } from '@/components/ui/file-manager/file-browser'
 import type { Crumb } from '@/components/ui/file-manager/file-toolbar'
 import { useFileBrowser } from '@/components/ui/file-manager/use-file-browser'
+import { crumbsFor } from './crumbs'
 import { deepLinkHref } from './deep-link'
-import { type FileManagerHost, useFileManagerHost } from './use-file-manager-host'
+import { type FileManagerHost, type FileManagerHostOptions, useFileManagerHost } from './use-file-manager-host'
 
 function placeName(sections: FileManagerHost['sections'], placeId: string): string {
   for (const section of sections) {
@@ -16,30 +17,13 @@ function placeName(sections: FileManagerHost['sections'], placeId: string): stri
   return placeId
 }
 
-// Builds the full breadcrumb trail for a restored deep link, matching the entry-id
-// convention (crumb id = accumulated path, always trailing-slash) so the kit hook's
-// own navigation (which reads crumb.id straight from here) lines up with what
-// use-file-manager-host's onLocationChange expects.
+// The full breadcrumb trail for a restored deep link.
 function buildInitialCrumbs(
   sections: FileManagerHost['sections'],
   placeId: string,
   path?: string,
 ): Crumb[] | undefined {
-  if (!placeId) {
-    return undefined
-  }
-  const root: Crumb = { id: placeId, name: placeName(sections, placeId) }
-  const segments = (path ?? '').split('/').filter(Boolean)
-  if (!segments.length) {
-    return [root]
-  }
-  const crumbs = [root]
-  let accumulated = ''
-  for (const segment of segments) {
-    accumulated += `${segment}/`
-    crumbs.push({ id: `/${accumulated}`, name: segment })
-  }
-  return crumbs
+  return placeId ? crumbsFor(placeId, placeName(sections, placeId), path) : undefined
 }
 
 /**
@@ -52,30 +36,17 @@ function buildInitialCrumbs(
  * to the kit's own 'empty' state naturally).
  */
 export function FileManagerBrowser({
-  space,
-  sections,
-  defaultPlaceId,
-  initialPath,
-  onLocationSettled,
   onAddConnection,
   sourcesLoading,
-  activeRootPath,
   className,
-}: {
-  space: string
-  sections: FileManagerHost['sections']
-  defaultPlaceId: string
-  initialPath?: string
-  onLocationSettled?: (source: string, path: string) => void
+  ...hostOptions
+}: FileManagerHostOptions & {
   onAddConnection?: () => void
   sourcesLoading?: boolean
-  /** The root path configured for `defaultPlaceId`. Changing it re-roots browsing,
-   *  so the host reloads from "/" rather than leaving the previous listing on
-   *  screen. Undefined when that source has no root configured. */
-  activeRootPath?: string
   className?: string
 }) {
-  const host = useFileManagerHost(space, sections, defaultPlaceId, initialPath, onLocationSettled, activeRootPath)
+  const host = useFileManagerHost(hostOptions)
+  const { sections, defaultPlaceId, initialPath } = hostOptions
   // Built once, on first mount: useFileBrowser reads its initialPath option only
   // on its own first render, so later place changes have nothing to update here.
   const [initialCrumbs] = useState(() => buildInitialCrumbs(sections, defaultPlaceId, initialPath))

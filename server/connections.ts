@@ -3,6 +3,7 @@ import { terminal } from '@opencroft/server/terminal'
 
 import { getProvider } from './provider'
 import { getConnection, getSourceSettings } from './storage'
+import { requireTerminalInSpace } from './terminal-sources'
 import type {
   FtpConnectionConfig,
   Provider,
@@ -12,44 +13,35 @@ import type {
   Source,
 } from './types'
 
-const SECRET_PREFIX = 'secret:'
 const TERM_PREFIX = 'term:'
 const CONN_PREFIX = 'conn:'
 
-// A field value of "secret:NAME" resolves NAME from the Secrets Store server-side;
-// anything else is used literally. Only the reference (never the resolved value) is
-// ever part of connections storage, so it can't leak through the client or a graph read.
-async function resolveField(value: string): Promise<string> {
-  if (!value.startsWith(SECRET_PREFIX)) {
-    return value
-  }
-  const name = value.slice(SECRET_PREFIX.length).trim()
-  const resolved = name ? await secrets.resolve(name) : null
-  if (resolved === null) {
-    throw new Error(`Secret "${name}" not found in any Secrets Store`)
-  }
-  return resolved
+// A field value of "secret:NAME" resolves NAME server-side from the Secrets Stores in the
+// connection's space; anything else is used literally. Only the reference (never the resolved
+// value) is ever part of connections storage, so it can't leak through the client or a graph read.
+function resolveField(space: string, value: string): Promise<string> {
+  return secrets.resolveValue(value, { spaceSlug: space })
 }
 
-async function resolveS3Config(config: S3ConnectionConfig): Promise<ResolvedS3Config> {
+async function resolveS3Config(space: string, config: S3ConnectionConfig): Promise<ResolvedS3Config> {
   return {
     ...config,
-    accessKeyId: await resolveField(config.accessKeyId ?? ''),
-    secretAccessKey: await resolveField(config.secretAccessKey ?? ''),
+    accessKeyId: await resolveField(space, config.accessKeyId ?? ''),
+    secretAccessKey: await resolveField(space, config.secretAccessKey ?? ''),
   }
 }
 
-async function resolveFtpConfig(config: FtpConnectionConfig): Promise<ResolvedFtpConfig> {
+async function resolveFtpConfig(space: string, config: FtpConnectionConfig): Promise<ResolvedFtpConfig> {
   return {
     ...config,
-    password: await resolveField(config.password ?? ''),
+    password: await resolveField(space, config.password ?? ''),
   }
 }
 
 /**
  * Resolve a source reference into a concrete, secret-resolved `Source`.
- * `term:<nodeId>/<handleId>` — any terminal-context output handle, anywhere,
- * resolved via terminal.getContext (no edge required).
+ * `term:<nodeId>/<handleId>` — a terminal-context output handle `space` lists
+ * (listTerminalSources), resolved via terminal.getContext (no edge required).
  * `conn:<id>` — an S3/FTP connection configured in `space`.
  */
 export async function resolveSource(space: string, ref: string): Promise<Source> {
@@ -59,6 +51,7 @@ export async function resolveSource(space: string, ref: string): Promise<Source>
     if (slash < 0) {
       throw new Error(`Invalid terminal source reference: ${ref}`)
     }
+    await requireTerminalInSpace(space, ref)
     const nodeId = rest.slice(0, slash)
     const handleId = rest.slice(slash + 1)
     const ctx = await terminal.getContext(nodeId, handleId)
@@ -72,9 +65,9 @@ export async function resolveSource(space: string, ref: string): Promise<Source>
       throw new Error(`Unknown connection: ${id}`)
     }
     if (connection.type === 's3') {
-      return { kind: 's3', config: await resolveS3Config(connection.config as S3ConnectionConfig) }
+      return { kind: 's3', config: await resolveS3Config(space, connection.config as S3ConnectionConfig) }
     }
-    return { kind: 'ftp', config: await resolveFtpConfig(connection.config as FtpConnectionConfig) }
+    return { kind: 'ftp', config: await resolveFtpConfig(space, connection.config as FtpConnectionConfig) }
   }
 
   throw new Error(`Invalid source reference: ${ref}`)
@@ -110,6 +103,7 @@ function withRootPath(provider: Provider, root: string): Provider {
     delete: (path) => provider.delete(toReal(path)),
     rename: (oldPath, newPath) => provider.rename(toReal(oldPath), toReal(newPath)),
     mkdir: (path) => provider.mkdir(toReal(path)),
+    createFile: (path) => provider.createFile(toReal(path)),
   }
 }
 

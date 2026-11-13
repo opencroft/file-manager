@@ -29,16 +29,19 @@ export interface Provider {
   writeStream(path: string, filename: string, stream: Readable): Promise<void>
   delete(path: string): Promise<void>
   rename(oldPath: string, newPath: string): Promise<void>
+  /** Creates one folder in an existing parent; refuses when anything already has that path. */
   mkdir(path: string): Promise<void>
+  /** Creates one empty file in an existing parent; refuses when anything already has that path. */
+  createFile(path: string): Promise<void>
 }
 
 export interface S3ConnectionConfig {
   endpoint?: string
   region?: string
   bucket: string
-  /** Literal value, or "secret:NAME" resolved server-side from the Secrets Store. */
+  /** Typed text, or "secret:NAME" resolved server-side from the Secrets Stores of the connection's space. */
   accessKeyId: string
-  /** Literal value, or "secret:NAME" resolved server-side from the Secrets Store. */
+  /** Typed text, or "secret:NAME" resolved server-side from the Secrets Stores of the connection's space. */
   secretAccessKey: string
 }
 
@@ -46,7 +49,7 @@ export interface FtpConnectionConfig {
   host: string
   port?: number
   user: string
-  /** Literal value, or "secret:NAME" resolved server-side from the Secrets Store. */
+  /** Typed text, or "secret:NAME" resolved server-side from the Secrets Stores of the connection's space. */
   password: string
   secure?: boolean
 }
