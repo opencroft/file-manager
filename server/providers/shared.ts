@@ -4,13 +4,7 @@ import { Client } from 'ssh2'
 
 import type { TerminalContext } from '../types'
 
-export function normalizePath(path: string): string {
-  return path.startsWith('/') ? path : `/${path}`
-}
-
-export function joinPath(dir: string, name: string): string {
-  return dir.endsWith('/') ? dir + name : `${dir}/${name}`
-}
+export { joinPath, normalizePath } from './paths'
 
 // The node the context names as `credentialsScope` (the Server it comes from) scopes its
 // credentials: a `secret:NAME` password resolves from the Secrets Stores on that node's graph, and a

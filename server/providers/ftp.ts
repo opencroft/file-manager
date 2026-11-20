@@ -4,6 +4,7 @@ import { Client, FileType } from 'basic-ftp'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, ResolvedFtpConfig } from '../types'
 import { alreadyExists } from './create'
+import { isPartialUpload, upload } from './upload'
 
 async function connect(config: ResolvedFtpConfig): Promise<Client> {
   const client = new Client()
@@ -36,17 +37,19 @@ export function ftpProvider(config: ResolvedFtpConfig): Provider {
       const dir = path || '/'
       const entries = await withClient(config, async (client) => {
         const list = await client.list(dir)
-        return list.map((item): FileEntry => {
+        const entries: FileEntry[] = []
+        for (const item of list) {
           const isDir = item.type === FileType.Directory
           const full = join(dir, item.name)
-          return {
+          entries.push({
             name: item.name,
             path: isDir ? `${full}/` : full,
             type: isDir ? 'directory' : 'file',
             size: isDir ? 0 : item.size,
-            modified: item.modifiedAt ? item.modifiedAt.toISOString() : '',
-          }
-        })
+            modified: (item.modifiedAt ?? (await partialModified(client, item.name, full)))?.toISOString() ?? '',
+          })
+        }
+        return entries
       })
       return { entries }
     },
@@ -66,8 +69,24 @@ export function ftpProvider(config: ResolvedFtpConfig): Provider {
     },
 
     async writeStream(path, filename, stream): Promise<void> {
-      const full = join(path || '/', filename)
-      await withClient(config, (client) => client.uploadFrom(stream as Readable, full))
+      // FTP has no way to copy one remote file into another, so a finished
+      // upload replaces an existing file by rename (RNTO).
+      await withClient(config, (client) =>
+        upload(join(path || '/', filename), stream, {
+          write: async (body, partial) => {
+            await client.uploadFrom(body, partial)
+            return { where: 'partial', size: await client.size(partial) }
+          },
+          land: async (partial, full) => {
+            await client.rename(partial, full)
+          },
+          // On a connection of its own: the upload's connection may be the
+          // one a cut-off transfer has broken.
+          discard: async (partial) => {
+            await withClient(config, (fresh) => fresh.remove(partial, true))
+          },
+        }),
+      )
     },
 
     async delete(path): Promise<void> {
@@ -102,6 +121,13 @@ export function ftpProvider(config: ResolvedFtpConfig): Provider {
       })
     },
   }
+}
+
+// A server that lists without MLSD gives no time a date can be read from, so
+// the partial file of an upload asks for its own (MDTM), letting a listing
+// tell one left behind from one in flight (stalePartials).
+function partialModified(client: Client, name: string, full: string): Promise<Date | undefined> {
+  return isPartialUpload(name) ? client.lastMod(full).catch(() => undefined) : Promise.resolve(undefined)
 }
 
 // FTP has no create-if-absent for a file (STOR replaces), so a create looks in

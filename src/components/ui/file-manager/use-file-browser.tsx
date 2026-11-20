@@ -1,9 +1,17 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentProps } from 'react'
 
 import type { ConnectionSidebar, PlaceSection } from './connection-sidebar'
 import type { FileEntryList, FileListState } from './file-entry-list'
-import { DEFAULT_FILE_SORT, type FileEntry, type FileEntryKind, type FileSort, type FileSortKey } from './file-entry-row'
+import type { FileSelectionBar } from './file-selection-bar'
+import {
+  DEFAULT_FILE_SORT,
+  type FileEntry,
+  type FileEntryKind,
+  type FileSort,
+  type FileSortKey,
+  type SelectGesture,
+} from './file-entry-row'
 import { FILE_KIND_LABEL, fileKind } from '@/components/ui/files/file-type-icon'
 import type { FileToolbar, Crumb } from './file-toolbar'
 import type { TransfersTray } from './transfers-tray'
@@ -18,6 +26,7 @@ type PlacesSlice = ComponentProps<typeof ConnectionSidebar>
 type ToolbarSlice = ComponentProps<typeof FileToolbar>
 type ListingSlice = ComponentProps<typeof FileEntryList>
 type TransfersSlice = ComponentProps<typeof TransfersTray>
+type SelectionBarSlice = ComponentProps<typeof FileSelectionBar>
 
 export interface UseFileBrowserOptions {
   // --- data for the current location (controlled: the hook emits ---
@@ -31,16 +40,26 @@ export interface UseFileBrowserOptions {
   // --- I/O (the host owns all data + side effects; the hook does none) ---
   onLocationChange?: (placeId: string, path: Crumb[]) => void
   onRefresh?: () => void
-  onDownload?: (entry: FileEntry) => void
+  // Download, Delete and Copy path(s) get the row's entry, or the whole
+  // selection when the row is part of it, in listing order -- as Pack does.
+  onDownload?: (entries: FileEntry[]) => void
   onRenameEntry?: (id: string, name: string) => void
-  onDelete?: (entry: FileEntry) => void
+  onDelete?: (entries: FileEntry[]) => void
   // Create a folder / an empty file named `name` in the current location.
   // Given, New folder / New file put a draft row in the listing in rename
   // mode, and this is called once, when a name is confirmed that no entry
   // already has. Escape, an empty name, or leaving the input calls nothing.
   onCreateFolder?: (name: string) => void
   onCreateFile?: (name: string) => void
-  onCopyPath?: (entry: FileEntry) => void
+  onCopyPath?: (entries: FileEntry[]) => void
+  // Given, every row offers Pack into zip: `entries` is that row's entry, or the
+  // whole selection when the row is part of it, in listing order. Resolving
+  // with the id of the entry it made (the archive) opens that entry in rename
+  // mode once the listing holds it -- unless the location changed meanwhile, or
+  // a rename or a new entry is in progress then.
+  onPack?: (entries: FileEntry[]) => Promise<string | undefined | void> | void
+  // Given, a `.zip` file's row offers Unpack here.
+  onUnpack?: (entry: FileEntry) => void
   // A directory's Bookmark / Remove bookmark; `bookmarkedIds` says which it is.
   onToggleBookmark?: (entry: FileEntry) => void
   bookmarkedIds?: string[]
@@ -81,8 +100,18 @@ export interface UseFileBrowser {
   toolbar: ToolbarSlice
   listing: ListingSlice
   transfers: TransfersSlice
+  // The bar of selection mode (entered by a long press), while it is on.
+  selectionBar?: SelectionBarSlice
   // assembled, ready to spread into <FileBrowser {...browser.props} />
-  props: { places: PlacesSlice; toolbar: ToolbarSlice; listing: ListingSlice; transfers: TransfersSlice; sidebarOpen: boolean; onSidebarOpenChange: (open: boolean) => void }
+  props: {
+    places: PlacesSlice
+    toolbar: ToolbarSlice
+    listing: ListingSlice
+    transfers: TransfersSlice
+    selectionBar?: SelectionBarSlice
+    sidebarOpen: boolean
+    onSidebarOpenChange: (open: boolean) => void
+  }
 }
 
 const byName = (a: FileEntry, b: FileEntry) =>
@@ -123,6 +152,67 @@ export function newEntryNameError(entries: FileEntry[], name: string): string | 
   return entries.some((e) => e.name === name) ? `"${name}" already exists` : undefined
 }
 
+// The listing's selection. `anchor` is where a Shift range starts: the entry
+// last clicked without Shift. `touch` is selection mode, entered by a long
+// press: while it is on, a plain tap adds or removes an entry, as Ctrl+click
+// does. It holds only while something is selected.
+export interface Selection {
+  ids: string[]
+  anchor: string | null
+  touch: boolean
+}
+
+export const NO_SELECTION: Selection = { ids: [], anchor: null, touch: false }
+
+// `selection` without the entries `order` no longer holds (deleted, filtered
+// out); the same object when it holds them all.
+export function selectionWithin(selection: Selection, order: readonly string[]): Selection {
+  const shown = new Set(order)
+  const ids = selection.ids.filter((id) => shown.has(id))
+  const anchor = selection.anchor !== null && shown.has(selection.anchor) ? selection.anchor : null
+  if (ids.length === selection.ids.length && anchor === selection.anchor) return selection
+  return { ids, anchor, touch: selection.touch && ids.length > 0 }
+}
+
+// The selection after a click (or Space) on entry `id`, `order` being the
+// entries' ids as the listing shows them. A range spans `order` from the
+// anchor to `id`, both included, replacing the selection or, with toggle,
+// added to it; the anchor stays. Without an anchor in `order` a range click
+// acts as a click.
+export function selectionAfter(selection: Selection, order: readonly string[], id: string, gesture: SelectGesture): Selection {
+  const current = selectionWithin(selection, order)
+  const toggle = gesture.toggle || current.touch
+  const from = gesture.range && current.anchor !== null ? order.indexOf(current.anchor) : -1
+  const to = order.indexOf(id)
+  if (to === -1) return current
+  if (from !== -1) {
+    const span = order.slice(Math.min(from, to), Math.max(from, to) + 1)
+    const held = new Set(current.ids)
+    const ids = toggle ? [...current.ids, ...span.filter((s) => !held.has(s))] : span
+    return { ids, anchor: current.anchor, touch: current.touch }
+  }
+  if (!toggle) return { ids: [id], anchor: id, touch: false }
+  const ids = current.ids.includes(id) ? current.ids.filter((s) => s !== id) : [...current.ids, id]
+  return { ids, anchor: id, touch: current.touch && ids.length > 0 }
+}
+
+// The selection as a row's menu opens on entry `id` (right-click, long press).
+// An entry outside the selection becomes the selection alone, as file
+// managers do -- except in selection mode, where a long press adds it. A long
+// press turns selection mode on.
+export function selectionForMenu(selection: Selection, order: readonly string[], id: string, touch: boolean): Selection {
+  const current = selectionWithin(selection, order)
+  if (current.ids.includes(id)) return touch && !current.touch ? { ...current, touch } : current
+  if (current.touch && touch) return { ids: [...current.ids, id], anchor: id, touch }
+  return { ids: [id], anchor: id, touch }
+}
+
+// What a finger's tap on an entry does: outside selection mode it opens the
+// entry, as Enter does; in selection mode it adds or removes it.
+export function tapAction(selection: Selection, order: readonly string[]): 'open' | 'toggle' {
+  return selectionWithin(selection, order).touch ? 'toggle' : 'open'
+}
+
 // Headless controller for the file browser. It owns every piece of pure-UI
 // state (active place, current path + back/forward/up history, selection, view
 // mode, sort, inline-rename and new-entry drafts, transfers-tray expansion,
@@ -147,6 +237,8 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     onCreateFolder,
     onCreateFile,
     onCopyPath,
+    onPack,
+    onUnpack,
     onToggleBookmark,
     bookmarkedIds,
     onUpload,
@@ -175,7 +267,8 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
   const [past, setPast] = useState<Crumb[][]>([])
   const [future, setFuture] = useState<Crumb[][]>([])
 
-  const [selection, setSelection] = useState<string[]>([])
+  const [selected, setSelected] = useState<Selection>(NO_SELECTION)
+  const clearSelection = useCallback(() => setSelected(NO_SELECTION), [])
   const [view, setView] = useState<FileView>(initialView)
   const [sort, setSort] = useState<FileSort>(initialSort)
   const [searchValue, setSearchValue] = useState('')
@@ -214,7 +307,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     (next: Crumb[]) => {
       setPast((p) => [...p, path])
       setFuture([])
-      setSelection([])
+      setSelected(NO_SELECTION)
       endDrafts()
       setPath(next)
       onLocationChange?.(activePlaceId, next)
@@ -236,7 +329,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     const prev = past[past.length - 1]
     setPast(past.slice(0, -1))
     setFuture((f) => [path, ...f])
-    setSelection([])
+    setSelected(NO_SELECTION)
     endDrafts()
     setPath(prev)
     onLocationChange?.(activePlaceId, prev)
@@ -247,7 +340,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     const next = future[0]
     setFuture(future.slice(1))
     setPast((p) => [...p, path])
-    setSelection([])
+    setSelected(NO_SELECTION)
     endDrafts()
     setPath(next)
     onLocationChange?.(activePlaceId, next)
@@ -274,7 +367,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       setActivePlaceId(placeId)
       setPast([])
       setFuture([])
-      setSelection([])
+      setSelected(NO_SELECTION)
       endDrafts()
       setPath(next)
       onLocationChange?.(placeId, next)
@@ -289,15 +382,49 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     [path, pushPath],
   )
 
-  const select = useCallback((entry: FileEntry, additive: boolean) => {
-    setSelection((prev) =>
-      additive
-        ? prev.includes(entry.id)
-          ? prev.filter((id) => id !== entry.id)
-          : [...prev, entry.id]
-        : [entry.id],
-    )
-  }, [])
+  // The entries in the listing's order, and their ids: what a Shift range
+  // spans, what Select all takes, and the order a selection is acted on in.
+  const ordered = useMemo(() => [...entries].sort(compareEntries(sort)), [entries, sort])
+  const order = useMemo(() => ordered.map((e) => e.id), [ordered])
+  // Only entries the listing still holds are selected: one deleted, or gone
+  // from a refreshed or filtered listing, drops out.
+  const current = useMemo(() => selectionWithin(selected, order), [selected, order])
+  const selection = current.ids
+  // Selection mode: on from a long press until nothing is selected.
+  const selectionMode = current.touch
+  // ...and stays out, so an entry made again under the same id is not selected.
+  useEffect(() => setSelected((prev) => selectionWithin(prev, order)), [order])
+  const selectionSet = useMemo(() => new Set(selection), [selection])
+  const selectedEntries = useMemo(() => ordered.filter((e) => selectionSet.has(e.id)), [ordered, selectionSet])
+
+  const select = useCallback(
+    (entry: FileEntry, gesture: SelectGesture) => setSelected((prev) => selectionAfter(prev, order, entry.id, gesture)),
+    [order],
+  )
+  const selectAll = useCallback(
+    () => setSelected((prev) => ({ ids: order, anchor: selectionWithin(prev, order).anchor, touch: prev.touch && order.length > 0 })),
+    [order],
+  )
+  const contextSelect = useCallback(
+    (entry: FileEntry, touch: boolean) => setSelected((prev) => selectionForMenu(prev, order, entry.id, touch)),
+    [order],
+  )
+  // A long press enters selection mode with the entry selected (or adds it,
+  // when the mode is on); a tap opens, or toggles in selection mode.
+  const longPress = useCallback((entry: FileEntry) => contextSelect(entry, true), [contextSelect])
+  const tap = useCallback(
+    (entry: FileEntry) => {
+      if (tapAction(selected, order) === 'toggle') select(entry, { toggle: true, range: false })
+      else activateEntry(entry)
+    },
+    [selected, order, select, activateEntry],
+  )
+  // What a row's action acts on: the selection when the row is part of it,
+  // else the row alone.
+  const targetsOf = useCallback(
+    (entry: FileEntry) => (selectionSet.has(entry.id) ? ordered.filter((e) => selectionSet.has(e.id)) : [entry]),
+    [selectionSet, ordered],
+  )
 
   const startRename = useCallback(
     (entry: FileEntry) => {
@@ -349,6 +476,43 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     [endDrafts],
   )
 
+  // An entry the host has just made (a packed archive), renamed as soon as the
+  // listing holds it. Any change of location drops it: the listing it was
+  // made in is gone.
+  const [pendingRenameId, setPendingRenameId] = useState<string | null>(null)
+  const locationVersion = useRef(0)
+  useEffect(() => {
+    locationVersion.current += 1
+    setPendingRenameId(null)
+  }, [activePlaceId, path])
+  useEffect(() => {
+    if (!pendingRenameId) return
+    const entry = entries.find((e) => e.id === pendingRenameId)
+    if (!entry) return
+    setPendingRenameId(null)
+    // a rename or new entry the person started meanwhile is theirs to finish
+    if (renamingId === null && !creating) startRename(entry)
+  }, [pendingRenameId, entries, renamingId, creating, startRename])
+
+  const packEntries = useMemo(() => {
+    if (!onPack) return undefined
+    return (chosen: FileEntry[]) => {
+      const at = locationVersion.current
+      // A failure is the host's to report; here it only means nothing to rename.
+      Promise.resolve(onPack(chosen)).then(
+        (id) => {
+          if (id && locationVersion.current === at) setPendingRenameId(id)
+        },
+        () => {},
+      )
+    }
+  }, [onPack])
+  const pack = useMemo(() => (packEntries ? (entry: FileEntry) => packEntries(targetsOf(entry)) : undefined), [packEntries, targetsOf])
+
+  const download = useMemo(() => (onDownload ? (entry: FileEntry) => onDownload(targetsOf(entry)) : undefined), [onDownload, targetsOf])
+  const remove = useMemo(() => (onDelete ? (entry: FileEntry) => onDelete(targetsOf(entry)) : undefined), [onDelete, targetsOf])
+  const copyPath = useMemo(() => (onCopyPath ? (entry: FileEntry) => onCopyPath(targetsOf(entry)) : undefined), [onCopyPath, targetsOf])
+
   const newFolder = useMemo(() => (onCreateFolder ? () => startCreate('directory') : undefined), [onCreateFolder, startCreate])
   const newFile = useMemo(() => (onCreateFile ? () => startCreate('file') : undefined), [onCreateFile, startCreate])
 
@@ -369,12 +533,13 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
         : sections,
     [sections, locationHref],
   )
-  const linkedEntries = useMemo(() => {
-    const ordered = [...entries].sort(compareEntries(sort))
-    return locationHref
-      ? ordered.map((e) => (e.kind === 'directory' ? { ...e, href: locationHref(activePlaceId, e.id) ?? e.href } : e))
-      : ordered
-  }, [entries, sort, locationHref, activePlaceId])
+  const linkedEntries = useMemo(
+    () =>
+      locationHref
+        ? ordered.map((e) => (e.kind === 'directory' ? { ...e, href: locationHref(activePlaceId, e.id) ?? e.href } : e))
+        : ordered,
+    [ordered, locationHref, activePlaceId],
+  )
 
   const places = useMemo<PlacesSlice>(
     () => ({ sections: linkedSections, activePlaceId, onPlaceActivate: activatePlace, onAddConnection }),
@@ -398,8 +563,10 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     () => ({
       path: shownPath,
       onNavigate: navigateToCrumb,
-      onBack: back,
-      canBack,
+      // In selection mode Back leaves the mode, as a phone's file manager
+      // does, rather than leaving the folder.
+      onBack: selectionMode ? clearSelection : back,
+      canBack: canBack || selectionMode,
       onForward: forward,
       canForward,
       onUp: up,
@@ -416,7 +583,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       onNewFile: newFile,
       onUpload,
     }),
-    [shownPath, navigateToCrumb, back, canBack, forward, canForward, up, canUp, onRefresh, searchValue, view, sort, newFolder, newFile, onUpload],
+    [shownPath, navigateToCrumb, back, clearSelection, canBack, selectionMode, forward, canForward, up, canUp, onRefresh, searchValue, view, sort, newFolder, newFile, onUpload],
   )
 
   const listing = useMemo<ListingSlice>(
@@ -429,8 +596,13 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       onSortChange: setSort,
       selectedIds: selection,
       onActivate: activateEntry,
+      onTap: tap,
+      onLongPress: longPress,
       onSelect: select,
-      onDownload,
+      onSelectAll: selectAll,
+      onClearSelection: clearSelection,
+      onContextSelect: contextSelect,
+      onDownload: download,
       onRename: startRename,
       renamingId,
       renameValue,
@@ -440,8 +612,10 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       renameError,
       creating,
       onMenuOpenChange: handleMenuOpenChange,
-      onDelete,
-      onCopyPath,
+      onDelete: remove,
+      onCopyPath: copyPath,
+      onPack: pack,
+      onUnpack,
       onToggleBookmark,
       bookmarkedIds,
       onNewFolder: newFolder,
@@ -451,7 +625,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
       onFilesDrop,
       onRetry,
     }),
-    [linkedEntries, state, errorMessage, view, sort, selection, activateEntry, select, onDownload, startRename, renamingId, renameValue, changeRenameValue, commitRename, endDrafts, renameError, creating, handleMenuOpenChange, onDelete, onCopyPath, onToggleBookmark, bookmarkedIds, newFolder, newFile, onUpload, onRefresh, onFilesDrop, onRetry],
+    [linkedEntries, state, errorMessage, view, sort, selection, activateEntry, tap, longPress, select, selectAll, clearSelection, contextSelect, download, startRename, renamingId, renameValue, changeRenameValue, commitRename, endDrafts, renameError, creating, handleMenuOpenChange, remove, copyPath, pack, onUnpack, onToggleBookmark, bookmarkedIds, newFolder, newFile, onUpload, onRefresh, onFilesDrop, onRetry],
   )
 
   const transfersSlice = useMemo<TransfersSlice>(
@@ -466,16 +640,38 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     [transfers, transfersSummary, trayOpen, onCancelTransfer, onRetryTransfer],
   )
 
+  const only = selectedEntries.length === 1 ? selectedEntries[0] : undefined
+  const selectionBar = useMemo<SelectionBarSlice | undefined>(
+    () =>
+      selectionMode
+        ? {
+            entries: selectedEntries,
+            onClear: clearSelection,
+            onSelectAll: selectedEntries.length < order.length ? selectAll : undefined,
+            onDownload,
+            onPack: packEntries,
+            onCopyPath,
+            onDelete,
+            onRename: startRename,
+            onUnpack,
+            onToggleBookmark,
+            bookmarked: Boolean(only && bookmarkedIds?.includes(only.id)),
+          }
+        : undefined,
+    [selectionMode, selectedEntries, clearSelection, order.length, selectAll, onDownload, packEntries, onCopyPath, onDelete, startRename, onUnpack, onToggleBookmark, only, bookmarkedIds],
+  )
+
   const props = useMemo(
     () => ({
       places,
       toolbar,
       listing,
       transfers: transfersSlice,
+      selectionBar,
       sidebarOpen,
       onSidebarOpenChange: setSidebarOpen,
     }),
-    [places, toolbar, listing, transfersSlice, sidebarOpen],
+    [places, toolbar, listing, transfersSlice, selectionBar, sidebarOpen],
   )
 
   return {
@@ -494,6 +690,7 @@ export function useFileBrowser(options: UseFileBrowserOptions): UseFileBrowser {
     toolbar,
     listing,
     transfers: transfersSlice,
+    selectionBar,
     props,
   }
 }

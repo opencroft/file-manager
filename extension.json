@@ -1,7 +1,7 @@
 {
   "id": "opencroft.file-manager",
   "name": "File Manager",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Browse, upload and download files over terminal handles, S3 and FTP.",
   "provides": {
     "apps": [
@@ -9,7 +9,63 @@
         "type": "file-manager",
         "title": "File Manager",
         "description": "Browse and manage files over terminal sources and the space's S3/FTP connections.",
-        "icon": "FolderOpen"
+        "icon": "FolderOpen",
+        "actions": [
+          {
+            "id": "pack",
+            "label": "Pack into zip",
+            "description": "Pack files and folders of a terminal into a new zip archive, folders with everything in them. The archive gets a free name: the one asked for, or one made from the single item's name (\"Archive.zip\" for several), with \" 2\", \" 3\"… added when it is taken; nothing is overwritten. The terminal needs no zip tool. Answers the archive's path and name, and how many files, folders and bytes went in. A failure leaves no archive behind.",
+            "execution": "awaitable",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "The terminal, as <nodeId>/<handleId>"
+                },
+                "paths": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "minItems": 1,
+                  "description": "Absolute paths of the files and folders to pack; no two with the same name"
+                },
+                "target": {
+                  "type": "string",
+                  "description": "Absolute path of the folder the archive goes into. Default: the first path's folder"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The archive's file name. Default: from the items"
+                }
+              },
+              "required": ["source", "paths"]
+            }
+          },
+          {
+            "id": "unpack",
+            "label": "Unpack zip",
+            "description": "Unpack a zip archive on a terminal into a new folder named after it (a free name, \" 2\" and on when taken), so nothing already there is overwritten. The terminal needs no unzip tool. An archive with an entry that would land outside that folder (\"..\" or an absolute path) is refused before anything is written. Symbolic links and macOS's __MACOSX metadata are left out and counted. Answers the folder's path and name, and how many files, folders and bytes came out. A failure removes the folder.",
+            "execution": "awaitable",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "The terminal, as <nodeId>/<handleId>"
+                },
+                "archive": {
+                  "type": "string",
+                  "description": "Absolute path of the .zip archive"
+                },
+                "target": {
+                  "type": "string",
+                  "description": "Absolute path of the folder the new folder goes into. Default: the archive's folder"
+                }
+              },
+              "required": ["source", "archive"]
+            }
+          }
+        ]
       }
     ]
   },

@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type ReactElement } from 'react'
+import { useState, type DragEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { AlertTriangle, ArrowDown, ArrowUp, FilePlus, FolderOpen, FolderPlus, RefreshCw, Upload } from 'lucide-react'
 
 import {
@@ -9,6 +9,7 @@ import {
   type FileEntryKind,
   type FileSort,
   type FileSortKey,
+  type SelectGesture,
 } from './file-entry-row'
 import { Button } from '@/components/ui/button'
 import {
@@ -34,7 +35,17 @@ interface FileEntryListProps {
   sort?: FileSort
   onSortChange?: (sort: FileSort) => void
   onActivate?: (entry: FileEntry) => void
-  onSelect?: (entry: FileEntry, additive: boolean) => void
+  // A finger's tap and long press on a row: see FileEntryRow's onTap and onLongPress.
+  onTap?: (entry: FileEntry) => void
+  onLongPress?: (entry: FileEntry) => void
+  onSelect?: (entry: FileEntry, gesture: SelectGesture) => void
+  // With focus in the list: Ctrl/Cmd+A, and Escape while anything is
+  // selected. A click on the space below the entries also clears. Keys typed
+  // into an input or inside an open menu are left to them.
+  onSelectAll?: () => void
+  onClearSelection?: () => void
+  // A row's menu is opening: see FileEntryRow's onContextSelect.
+  onContextSelect?: (entry: FileEntry, touch: boolean) => void
   onDownload?: (entry: FileEntry) => void
   // Inline rename is controlled by the owner (the use-file-browser hook, or a
   // host wiring the list directly). The list only forwards these to the row
@@ -48,6 +59,9 @@ interface FileEntryListProps {
   onMenuOpenChange?: (open: boolean) => void
   onDelete?: (entry: FileEntry) => void
   onCopyPath?: (entry: FileEntry) => void
+  // Each row's Pack into zip, and Unpack here on a `.zip` file.
+  onPack?: (entry: FileEntry) => void
+  onUnpack?: (entry: FileEntry) => void
   // Directories whose id is in `bookmarkedIds` offer Remove bookmark, the rest Bookmark.
   onToggleBookmark?: (entry: FileEntry) => void
   bookmarkedIds?: string[]
@@ -96,7 +110,12 @@ export function FileEntryList({
   sort,
   onSortChange,
   onActivate,
+  onTap,
+  onLongPress,
   onSelect,
+  onSelectAll,
+  onClearSelection,
+  onContextSelect,
   onDownload,
   renamingId,
   renameValue,
@@ -107,6 +126,8 @@ export function FileEntryList({
   onMenuOpenChange,
   onDelete,
   onCopyPath,
+  onPack,
+  onUnpack,
   onToggleBookmark,
   bookmarkedIds,
   onNewFolder,
@@ -129,6 +150,19 @@ export function FileEntryList({
     setDragOver(false)
     const files = Array.from(e.dataTransfer?.files ?? [])
     if (files.length && onFilesDrop) onFilesDrop(files)
+  }
+
+  // React passes a portaled menu's keys up through this list as well, so only
+  // keys from the list's own DOM count, and none typed into a field.
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    if (!e.currentTarget.contains(target) || target.closest('input, textarea, [contenteditable="true"]')) return
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'a' && onSelectAll) {
+      e.preventDefault()
+      onSelectAll()
+    } else if (e.key === 'Escape' && selectedIds?.length && onClearSelection) {
+      onClearSelection()
+    }
   }
 
   const header = (key: FileSortKey, className?: string) => {
@@ -160,13 +194,16 @@ export function FileEntryList({
   }
 
   const variant = view === 'grid' ? 'card' : 'table'
+  const selectedSet = new Set(selectedIds)
 
   const renderEntry = (entry: FileEntry) => (
     <FileEntryRow
       key={entry.id}
       entry={entry}
       variant={variant}
-      selected={selectedIds?.includes(entry.id)}
+      selected={selectedSet.has(entry.id)}
+      selectionSize={selectedIds?.length}
+      onContextSelect={onContextSelect}
       renaming={renamingId === entry.id}
       renameValue={renameValue}
       onRenameChange={onRenameChange}
@@ -174,6 +211,8 @@ export function FileEntryList({
       onRenameCancel={onRenameCancel}
       renameError={renamingId === entry.id ? renameError : undefined}
       onActivate={onActivate}
+      onTap={onTap}
+      onLongPress={onLongPress}
       onSelect={onSelect}
       onDownload={onDownload}
       onRename={onRename}
@@ -181,6 +220,8 @@ export function FileEntryList({
       onNewFolder={onNewFolder}
       onNewFile={onNewFile}
       onCopyPath={onCopyPath}
+      onPack={onPack}
+      onUnpack={onUnpack}
       onToggleBookmark={onToggleBookmark}
       bookmarked={bookmarkedIds?.includes(entry.id)}
       onMenuOpenChange={onMenuOpenChange}
@@ -309,20 +350,32 @@ export function FileEntryList({
           <tbody>{rows}</tbody>
         </table>
       )
-    // The space below the last entry fills the rest of the pane and opens the
-    // list's menu. It is never shorter than 2rem, a little over one table
-    // row, so a folder long enough to scroll still has some at its end.
+    // The space below the last entry fills the rest of the pane, opens the
+    // list's menu and clears the selection on a click. It is never shorter
+    // than 2rem, a little over one table row, so a folder long enough to
+    // scroll still has some at its end.
     return (
       <div className='flex min-h-full flex-col'>
         {listing}
-        {withListMenu(<div data-slot='file-list-space' style={MENU_TRIGGER_TOUCH_STYLE} className='min-h-8 flex-1' />)}
+        {withListMenu(
+          <div
+            data-slot='file-list-space'
+            style={MENU_TRIGGER_TOUCH_STYLE}
+            className='min-h-8 flex-1'
+            onClick={() => onClearSelection?.()}
+          />,
+        )}
       </div>
     )
   })()
 
   return (
+    // Focusable (not tabbable) so a click on the space below the rows keeps
+    // focus in the list, where Ctrl/Cmd+A and Escape are heard.
     <div
-      className={cn('relative min-h-0 min-w-0 flex-1 overflow-auto rounded-md', className)}
+      tabIndex={-1}
+      className={cn('relative min-h-0 min-w-0 flex-1 overflow-auto rounded-md outline-none', className)}
+      onKeyDown={handleKeyDown}
       onDragOver={(e) => {
         if (!onFilesDrop) return
         e.preventDefault()

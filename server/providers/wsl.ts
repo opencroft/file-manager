@@ -3,8 +3,10 @@ import type { Readable } from 'node:stream'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
 import { createArgv, refuseTaken } from './create'
+import { spawnLocal } from './process'
 import { joinPath as join, normalizePath as normalize } from './shared'
 import { shellQuote } from './shell'
+import { commandBackend, upload } from './upload'
 
 function run(distro: string | undefined, cmd: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -90,25 +92,14 @@ export function wslProvider(ctx: TerminalContext): Provider {
     },
 
     async writeStream(path, filename, stream): Promise<void> {
-      const full = join(normalize(path), filename)
-      const args = [...(distro ? ['-d', distro] : []), '--', 'tee', full]
-      await new Promise<void>((resolve, reject) => {
-        const proc = spawn('wsl', args, { stdio: ['pipe', 'ignore', 'pipe'] })
-        let stderr = ''
-        proc.stderr.on('data', (chunk: Buffer) => {
-          stderr += chunk.toString()
-        })
-        proc.on('close', (code) => {
-          if (code !== 0) {
-            reject(new Error(stderr || `wsl tee exited with code ${code}`))
-            return
-          }
-          resolve()
-        })
-        proc.on('error', reject)
-        stream.on('error', reject)
-        stream.pipe(proc.stdin)
-      })
+      await upload(
+        join(normalize(path), filename),
+        stream,
+        commandBackend({
+          spawn: async (argv) => spawnLocal(['wsl', ...(distro ? ['-d', distro] : []), '-e', ...argv]),
+          exec: (argv) => runArgv(distro, argv),
+        }),
+      )
     },
 
     async delete(path): Promise<void> {

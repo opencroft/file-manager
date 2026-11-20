@@ -4,8 +4,10 @@ import type { Client, SFTPWrapper } from 'ssh2'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult, TerminalContext } from '../types'
 import { createCommand, refuseTaken } from './create'
+import { spawnOverSsh } from './process'
 import { connectSsh, joinPath as join, normalizePath as normalize } from './shared'
 import { shellQuote } from './shell'
+import { commandBackend, upload } from './upload'
 
 function openSftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => {
@@ -35,6 +37,8 @@ function execOnClient(client: Client, command: string): Promise<void> {
       }
       let stderr = ''
       channel.stderr.on('data', (d: Buffer) => (stderr += d.toString()))
+      // ssh2 emits `close` only once stdout has ended, which takes reading it.
+      channel.resume()
       channel.on('close', (code: number) =>
         code === 0 ? resolve() : reject(new Error(stderr || `exited with code ${code}`)),
       )
@@ -88,17 +92,16 @@ export function sshProvider(ctx: TerminalContext): Provider {
     },
 
     async writeStream(path, filename, stream): Promise<void> {
-      const full = join(normalize(path), filename)
-      await withClient(ctx, async (client) => {
-        const sftp = await openSftp(client)
-        await new Promise<void>((resolve, reject) => {
-          const ws = sftp.createWriteStream(full)
-          ws.on('close', () => resolve())
-          ws.on('error', reject)
-          stream.on('error', reject)
-          stream.pipe(ws)
-        })
-      })
+      await withClient(ctx, (client) =>
+        upload(
+          join(normalize(path), filename),
+          stream,
+          commandBackend({
+            spawn: (argv) => spawnOverSsh(client, argv),
+            exec: (argv) => execOnClient(client, argv.map(shellQuote).join(' ')),
+          }),
+        ),
+      )
     },
 
     async delete(path): Promise<void> {

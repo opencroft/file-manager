@@ -1,6 +1,7 @@
 import type { AppActionContext, AppInstanceContext, AppServerHooks } from '@opencroft/server/apps'
 import { storage } from '@opencroft/server/storage'
 
+import { archiveActions } from './archives'
 import { bookmarked, type PlaceRef, type Places, usedRecently, without, withoutBookmarkedRecent } from './place-lists'
 
 const TERM_PREFIX = 'term:'
@@ -73,11 +74,13 @@ async function forgetInstance(ctx: AppInstanceContext): Promise<void> {
 
 /**
  * The File Manager App's server half: the calling person's Bookmarks and
- * Recent folders. Run from the App's own UI (`callAppAction`), which is what
- * binds `ctx.callerPerson`; each action answers the lists as they now stand.
+ * Recent folders, run from the App's own UI (`callAppAction`), which is what
+ * binds `ctx.callerPerson`, each answering the lists as they now stand; and
+ * pack and unpack, which agents call.
  */
 export const fileManagerApp: AppServerHooks = {
   actions: {
+    ...archiveActions,
     places: (ctx) => readPlaces(placesKey(ctx.instanceId, requirePerson(ctx))),
     recordRecent: changeAction(usedRecently),
     addBookmark: changeAction(bookmarked),

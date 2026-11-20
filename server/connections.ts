@@ -1,9 +1,10 @@
 import { secrets } from '@opencroft/server/secrets'
-import { terminal } from '@opencroft/server/terminal'
+import { agentRefusalOf, terminal } from '@opencroft/server/terminal'
 
 import { getProvider } from './provider'
+import { withoutPartials } from './providers/partials'
 import { getConnection, getSourceSettings } from './storage'
-import { requireTerminalInSpace } from './terminal-sources'
+import { terminalSpaceOf } from './terminal-sources'
 import type {
   FtpConnectionConfig,
   Provider,
@@ -40,8 +41,9 @@ async function resolveFtpConfig(space: string, config: FtpConnectionConfig): Pro
 
 /**
  * Resolve a source reference into a concrete, secret-resolved `Source`.
- * `term:<nodeId>/<handleId>` — a terminal-context output handle `space` lists
- * (listTerminalSources), resolved via terminal.getContext (no edge required).
+ * `term:<nodeId>/<handleId>` — a terminal-context output handle some space
+ * lists (listTerminalSources), resolved via terminal.getContext (no edge
+ * required). Which person may reach that space is the caller's to check.
  * `conn:<id>` — an S3/FTP connection configured in `space`.
  */
 export async function resolveSource(space: string, ref: string): Promise<Source> {
@@ -51,7 +53,7 @@ export async function resolveSource(space: string, ref: string): Promise<Source>
     if (slash < 0) {
       throw new Error(`Invalid terminal source reference: ${ref}`)
     }
-    await requireTerminalInSpace(space, ref)
+    await terminalSpaceOf(ref)
     const nodeId = rest.slice(0, slash)
     const handleId = rest.slice(slash + 1)
     const ctx = await terminal.getContext(nodeId, handleId)
@@ -107,11 +109,28 @@ function withRootPath(provider: Provider, root: string): Provider {
   }
 }
 
-/** The single entry point actions/routes use: resolve the ref, build its provider, apply any configured root-path scoping. */
-export async function getProviderForRef(space: string, ref: string): Promise<Provider> {
-  const source = await resolveSource(space, ref)
-  const provider = getProvider(source)
+async function providerOf(space: string, ref: string, source: Source): Promise<Provider> {
+  const provider = withoutPartials(getProvider(source))
   const { rootPath } = await getSourceSettings(space, ref)
   const root = rootPath ? normalizeRoot(rootPath) : undefined
   return root ? withRootPath(provider, root) : provider
+}
+
+/** The single entry point actions/routes use: resolve the ref, build its provider, apply any configured root-path scoping. */
+export async function getProviderForRef(space: string, ref: string): Promise<Provider> {
+  return providerOf(space, ref, await resolveSource(space, ref))
+}
+
+/**
+ * getProviderForRef for a caller that is not a person in the App's own UI (an
+ * agent's App action): a terminal whose source closed it to agents is refused
+ * with the reason the source gave, as the host's own terminal tools refuse it.
+ */
+export async function getProviderForAgent(space: string, ref: string): Promise<Provider> {
+  const source = await resolveSource(space, ref)
+  const refusal = source.kind === 'terminal' ? agentRefusalOf(source.ctx) : null
+  if (refusal) {
+    throw new Error(refusal)
+  }
+  return providerOf(space, ref, source)
 }

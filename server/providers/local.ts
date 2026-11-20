@@ -2,7 +2,9 @@ import fs from 'node:fs'
 
 import type { FileEntry, ListResult, Provider, ReadStreamResult } from '../types'
 import { refuseTaken } from './create'
+import { fsBackend } from './fs-upload'
 import { joinPath as join, normalizePath as normalize } from './shared'
+import { upload } from './upload'
 
 export const localProvider: Provider = {
   async list(path): Promise<ListResult> {
@@ -39,14 +41,7 @@ export const localProvider: Provider = {
   },
 
   async writeStream(path, filename, stream): Promise<void> {
-    const full = join(normalize(path), filename)
-    await new Promise<void>((resolve, reject) => {
-      const ws = fs.createWriteStream(full)
-      ws.on('close', () => resolve())
-      ws.on('error', reject)
-      stream.on('error', reject)
-      stream.pipe(ws)
-    })
+    await upload(join(normalize(path), filename), stream, fsBackend)
   },
 
   async delete(path): Promise<void> {

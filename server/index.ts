@@ -2,13 +2,22 @@ import type { AppsExport } from '@opencroft/server/apps'
 import type { Load } from '@opencroft/server/lifecycle'
 import { storage } from '@opencroft/server/storage'
 
+import { runPack, runUnpack } from './archives'
 import { getProviderForRef } from './connections'
 import { fileManagerApp } from './places'
-import { transferRoutes } from './routes'
+import { fileManagerRoutes } from './routes'
+import { listContainerStates, listSources } from './sources'
+import { terminalSpaceOf } from './terminal-sources'
 
 export { actions } from './actions'
 
-export const routes = transferRoutes(getProviderForRef)
+export const routes = fileManagerRoutes({
+  providerFor: getProviderForRef,
+  archives: { pack: runPack, unpack: runUnpack },
+  terminalSpaceOf,
+  listSources,
+  containerStates: listContainerStates,
+})
 
 export const apps: AppsExport = { 'file-manager': fileManagerApp }
 

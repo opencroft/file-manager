@@ -1,19 +1,18 @@
 import { getProviderForRef } from './connections'
 import {
   addConnection,
-  getAllSourceSettings,
-  listConnections,
   removeConnection,
   type SourceSettings,
   setSourceSettings as setSourceSettingsStorage,
   updateConnection,
 } from './storage'
-import { listTerminalSources } from './terminal-sources'
 import type { ProtocolConnection, Provider } from './types'
 
-// Every action is scoped by the space its caller is in: connections and root
+// Every action is scoped by the space its App is in: connections and root
 // paths are stored per space (server/storage.ts), so the space is as much part
-// of addressing a source as the ref itself.
+// of addressing a source as the ref itself. A terminal may be in any space;
+// the list of them, which is filtered to the spaces the person sees, is the
+// `sources` route's (server/routes.ts).
 
 function requireString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value) {
@@ -56,20 +55,6 @@ async function testConnectionAction(space: string, source: string) {
   return { ok: true }
 }
 
-async function listSourcesAction(space: string): Promise<{
-  connections: ProtocolConnection[]
-  terminalSources: Awaited<ReturnType<typeof listTerminalSources>>
-  sourceSettings: Record<string, SourceSettings>
-}> {
-  const scope = requireString(space, 'space')
-  const [connections, terminalSources, sourceSettings] = await Promise.all([
-    listConnections(scope),
-    listTerminalSources(scope),
-    getAllSourceSettings(scope),
-  ])
-  return { connections, terminalSources, sourceSettings }
-}
-
 async function addConnectionAction(space: string, input: Omit<ProtocolConnection, 'id'>) {
   return addConnection(requireString(space, 'space'), input)
 }
@@ -95,7 +80,6 @@ export const actions = {
   rename: renameAction,
   delete: deleteAction,
   testConnection: testConnectionAction,
-  listSources: listSourcesAction,
   addConnection: addConnectionAction,
   updateConnection: updateConnectionAction,
   removeConnection: removeConnectionAction,

@@ -21,10 +21,22 @@ export interface ProtocolConnection {
   config: S3ConnectionConfig | FtpConnectionConfig
 }
 
+/** One terminal, as the `sources` route lists it (server/terminal-sources.ts). */
 export interface TerminalSourceInfo {
   ref: string
   title: string
+  /** The space the terminal is in. */
+  space: string
+  /** The graph its node is on, or the App instance offering it. */
+  app: { id: string; name: string; kind: 'graph' | 'app' }
+  /** The node or App instance offering it. */
+  owner: { id: string; name: string }
+  /** An Application's replica: a container, which may not be running. */
+  container: boolean
 }
+
+/** Whether a container terminal runs (server/container-states.ts). */
+export type ContainerState = 'running' | 'stopped' | 'unreachable'
 
 export interface SourceSettings {
   rootPath?: string
@@ -44,6 +56,9 @@ export interface Places {
 
 export interface ListSourcesResult {
   connections: ProtocolConnection[]
+  /** The terminals of every space the person sees, the App's own space's first. */
   terminalSources: TerminalSourceInfo[]
   sourceSettings: Record<string, SourceSettings>
+  /** Those spaces' names, in the same order. */
+  spaces: { slug: string; name: string }[]
 }

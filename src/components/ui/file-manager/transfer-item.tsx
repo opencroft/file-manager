@@ -1,9 +1,11 @@
-import { Check, Download, Loader2, RefreshCw, Upload, X } from 'lucide-react'
+import { Check, Download, FileArchive, Loader2, PackageOpen, RefreshCw, Upload, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from 'cn'
 
-export type TransferDirection = 'upload' | 'download'
+// What the transfer does: moves a file up or down, or packs entries into an
+// archive / unpacks one where it lies.
+export type TransferDirection = 'upload' | 'download' | 'pack' | 'unpack'
 export type TransferState = 'active' | 'complete' | 'error'
 
 // One in-flight file transfer. `progress` is 0..100 (omit it for an
@@ -27,7 +29,14 @@ interface TransferItemProps {
   className?: string
 }
 
-const DirectionIcon = { upload: Upload, download: Download } as const
+const DirectionIcon = { upload: Upload, download: Download, pack: FileArchive, unpack: PackageOpen } as const
+
+const DIRECTION_TONE: Record<TransferDirection, string> = {
+  upload: 'text-blue-500',
+  download: 'text-emerald-500',
+  pack: 'text-amber-500',
+  unpack: 'text-amber-500',
+}
 
 // A single transfer row: a direction icon, the name with size/speed (or an
 // error message), a progress bar, and a trailing action -- cancel while
@@ -73,7 +82,7 @@ export function TransferItem({ transfer, onCancel, onRetry, className }: Transfe
       <div
         className={cn(
           'flex size-7 shrink-0 items-center justify-center rounded-md bg-muted',
-          transfer.direction === 'upload' ? 'text-blue-500' : 'text-emerald-500',
+          DIRECTION_TONE[transfer.direction],
         )}
         aria-hidden
       >
